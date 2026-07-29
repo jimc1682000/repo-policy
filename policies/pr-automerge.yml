@@ -1,0 +1,106 @@
+# Default PR automerge risk policy.
+# Consumer repos call the reusable workflow and may supply an override YAML
+# (list keys are unioned; scalar/map keys are replaced or deep-merged).
+
+risk_labels:
+  risk:low:
+    color: "0E8A16"
+    description: "Low-risk PR eligible for automation"
+  risk:medium:
+    color: "FBCA04"
+    description: "Medium-risk PR requiring human observation"
+  risk:high:
+    color: "D93F0B"
+    description: "High-risk PR requiring human review"
+  risk:manual-only:
+    color: "B60205"
+    description: "PR must not be merged by automation"
+
+codex_label:
+  name: needs:codex-review
+  color: "5319E7"
+  description: "Codex review has been requested for this PR"
+
+markers:
+  looks_good: "repo-policy-pr-automation:looks-good"
+  codex_review_prefix: "repo-policy-pr-automation:codex-review:"
+
+trusted_comment_authors:
+  - github-actions[bot]
+
+# Allowed GITHUB_ACTOR values for merge execution (fail closed if empty match).
+allowed_merge_actors:
+  - github-actions[bot]
+
+# Dependency names that are always high risk (lowercase).
+high_risk_dependencies: []
+
+# Paths allowed for low-risk dependency / lockfile updates.
+safe_dependency_file_patterns:
+  - "uv.lock"
+  - "requirements*.txt"
+  - "**/package-lock.json"
+  - "**/package.json"
+  - "**/pnpm-lock.yaml"
+  - "**/yarn.lock"
+  - "**/Cargo.lock"
+  - "**/go.sum"
+  - "**/go.mod"
+  - "**/poetry.lock"
+  - "**/Pipfile.lock"
+  - ".github/workflows/*.yml"
+  - ".github/workflows/*.yaml"
+
+docs_file_patterns:
+  - "*.md"
+  - "README*.md"
+  - ".github/*.md"
+  - "docs/**/*.md"
+  - "docs/**/*.txt"
+  - "**/*.md"
+
+# Structural / sensitive paths → risk:high for non-dependency PRs.
+high_risk_file_patterns:
+  - ".github/workflows/*"
+  - "Dockerfile"
+  - "**/Dockerfile"
+  - "docker-compose*.yml"
+  - "docker-compose*.yaml"
+  - "**/*secret*"
+  - "**/*credential*"
+  - "**/auth*"
+  - "**/migration*"
+  - "**/migrations/*"
+
+# Dependency PRs that also touch these paths → risk:high.
+dependabot_structural_file_patterns:
+  - "Dockerfile"
+  - "**/Dockerfile"
+  - "docker-compose*.yml"
+  - "docker-compose*.yaml"
+  - "**/*secret*"
+  - "**/*credential*"
+  - "**/migration*"
+  - "**/migrations/*"
+
+manual_only_title_keywords:
+  - migration
+  - security
+  - auth
+  - rate limit
+  - stacked
+
+high_risk_title_keywords:
+  - breaking
+  - database
+  - db
+  - deploy
+  - refactor
+
+thresholds:
+  docs_only_max_lines: 100
+  small_pr_max_files: 3
+  small_pr_max_lines: 150
+
+# Workflow name to exclude from check rollup self-reference.
+automation_workflow_name: "PR merge automation"

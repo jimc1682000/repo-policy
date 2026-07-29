@@ -1,0 +1,100 @@
+# Reusable PR risk classification + low-risk squash merge.
+#
+# Security:
+# - Callers may use pull_request_target; this workflow never checks out or
+#   executes PR head code.
+# - Script and default policy come from this repo at a fixed ref (policy_ref).
+# - Optional override YAML is read only from the caller's default branch.
+# - Marker comments are trusted only from expected automation actors.
+
+name: PR automerge (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      default_branch:
+        description: Fallback default branch name when event payload has none
+        type: string
+        default: master
+      pr_number:
+        description: Single PR number; empty evaluates all open PRs
+        type: string
+        default: ""
+      policy_override_path:
+        description: Path in the caller repo (default branch) for override YAML
+        type: string
+        default: ""
+      policy_repository:
+        description: Repo that hosts the automation script and default policy
+        type: string
+        default: jimc1682000/repo-policy
+      policy_ref:
+        description: Fixed ref of the policy repository (never PR head)
+        type: string
+        default: main
+      automation_comment_authors:
+        description: Comma-separated logins trusted for marker comments
+        type: string
+        default: "github-actions[bot]"
+      automation_workflow_name:
+        description: Workflow name to exclude from check rollup self-reference
+        type: string
+        default: "PR merge automation"
+      dry_run:
+        description: Classify and print actions without mutating the PR
+        type: boolean
+        default: false
+    secrets:
+      token:
+        description: Token with contents:write + pull-requests:write (falls back to github.token)
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  actions: read
+  statuses: read
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      GITHUB_TOKEN: ${{ secrets.token || github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch || inputs.default_branch }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      AUTOMATION_COMMENT_AUTHORS: ${{ inputs.automation_comment_authors }}
+      AUTOMATION_WORKFLOW_NAME: ${{ inputs.automation_workflow_name }}
+      DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+      POLICY_PATH: repo-policy/policies/pr-automerge.yml
+    steps:
+      - name: Checkout policy repo (script + default policy only)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.policy_repository }}
+          ref: ${{ inputs.policy_ref }}
+          path: repo-policy
+          persist-credentials: false
+
+      - name: Checkout caller default-branch override (no PR head)
+        if: inputs.policy_override_path != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.repository.default_branch || inputs.default_branch }}
+          sparse-checkout: |
+            ${{ inputs.policy_override_path }}
+          sparse-checkout-cone-mode: false
+          path: caller
+          persist-credentials: false
+
+      - name: Install runtime deps
+        run: pip install --quiet pyyaml
+
+      - name: Evaluate PR merge policy
+        env:
+          POLICY_OVERRIDE_PATH: ${{ inputs.policy_override_path != '' && format('caller/{0}', inputs.policy_override_path) || '' }}
+        run: python repo-policy/scripts/pr_merge_automation.py

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Shared Renovate preset for repos using jimc1682000/repo-policy PR automerge. Renovate opens PRs; merge is gated by the shared PR risk workflow (not Renovate automerge).",
+  "extends": [
+    "config:recommended"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "dependencyDashboard": true,
+  "rangeStrategy": "bump",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "timezone": "Asia/Taipei",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "packageRules": [
+    {
+      "description": "Patch/minor dependency updates — candidate for risk:low after CI",
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": false,
+      "labels": ["dependencies", "deps:patch-minor"]
+    },
+    {
+      "description": "Major updates always need human review",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "deps:major"]
+    },
+    {
+      "description": "Lock file maintenance",
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "automerge": false,
+      "labels": ["dependencies", "deps:lockfile"]
+    },
+    {
+      "description": "GitHub Actions — major bumps are high risk",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["dependencies", "deps:actions-major"]
+    },
+    {
+      "description": "Group non-major GitHub Actions bumps",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["patch", "minor"],
+      "groupName": "github-actions non-major",
+      "automerge": false
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  }
+}
