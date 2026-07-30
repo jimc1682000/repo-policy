@@ -48,8 +48,16 @@ if [[ -z "$OWNER_FILTER" ]]; then
 fi
 
 pat_can_access() {
+  # Public repo metadata is readable without being on the PAT allow-list.
+  # Treat as allowed only when the PAT has push/maintain/admin on the repo.
   local full="$1"
-  GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" --jq .full_name >/dev/null 2>&1
+  local push
+  push="$(
+    GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" \
+      --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)' \
+      2>/dev/null || echo false
+  )"
+  [[ "$push" == "true" ]]
 }
 
 if [[ ${#REPOS[@]} -eq 0 ]]; then

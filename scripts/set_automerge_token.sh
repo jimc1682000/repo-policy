@@ -139,9 +139,17 @@ PY
 }
 
 pat_can_access() {
-  # Metadata is always granted on selected repos for fine-grained PATs.
+  # IMPORTANT: GET /repos/{owner}/{repo} succeeds for ANY public repo even when
+  # the fine-grained PAT did not select it (public metadata is world-readable).
+  # Require write-capable repo permission (Contents: write → push/maintain/admin).
   local full="$1"
-  GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" --jq .full_name >/dev/null 2>&1
+  local push
+  push="$(
+    GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" \
+      --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)' \
+      2>/dev/null || echo false
+  )"
+  [[ "$push" == "true" ]]
 }
 
 if [[ ${#REPOS[@]} -eq 0 ]]; then
