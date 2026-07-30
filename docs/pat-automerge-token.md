@@ -43,13 +43,15 @@ Reusable workflow 內：`secrets.token || github.token`。
 Fine-grained PAT **不能**可靠呼叫 `GET /user/repos`（常直接 HTTP 403）。腳本因此用兩段式：
 
 1. **候選清單**：本機已 login 的 `gh`（你帳號下的 repo），或 CLI / `--from-consumers`  
-2. **過濾**：用 **curl + `Authorization: Bearer $AUTOMERGE_TOKEN`**（不用 `gh api`，避免 keyring 蓋掉 PAT）  
-   且 **`permissions.push|maintain|admin` 為 true**  
+2. **過濾**：用 PAT 對每個 repo `POST .../git/blobs`（需要 **Contents: write**）  
+   - 201 → 在 allow-list 且有寫入權  
+   - 403/404 → 不在 list / 無權  
 
-> 注意兩件事：  
-> 1. 公開 repo metadata 任何人都能讀 → 不能只看 HTTP 200。  
-> 2. `GH_TOKEN=pat gh api …` 有時仍用本機 `gh` login（owner 對自己 repo 全是 admin）→ 會誤判 55 個全過。  
-> 腳本改為 curl Bearer-only probe。
+> **為什麼不能看 `permissions`？**  
+> Owner 用 fine-grained PAT 打 `GET /repos/...` 時，GitHub 常回你「身為 owner」的  
+> `admin/push: true`，**即使該 public repo 沒勾在 Only select 裡**。  
+> 你看到 CallbackLab 也是全 true，就是這個 API 語意，不是腳本又用了 keyring。  
+> 可靠做法：試一次需要 Contents write 的操作（orphan blob，不 commit）。
 
 **不會**硬編碼 repo 名單。`consumers.yml` 只是「建議誰該接 wrapper」。
 

@@ -11,6 +11,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROBE_PY="$ROOT/scripts/lib/pat_probe.py"
 CONSUMERS_FILE="${CONSUMERS_FILE:-$ROOT/consumers.yml}"
 SECRET_NAME="${SECRET_NAME:-AUTOMERGE_TOKEN}"
 OWNER_FILTER="${OWNER_FILTER:-}"
@@ -48,32 +49,8 @@ if [[ -z "$OWNER_FILTER" ]]; then
 fi
 
 pat_can_access() {
-  # curl + Bearer only — never `gh api` (keyring can override GH_TOKEN).
   local full="$1"
-  local body code push
-  body="$(mktemp)"
-  code="$(
-    curl -sS -o "$body" -w '%{http_code}' \
-      -H "Authorization: Bearer ${AUTOMERGE_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "https://api.github.com/repos/${full}"
-  )" || code="000"
-  if [[ "$code" != "200" ]]; then
-    rm -f "$body"
-    return 1
-  fi
-  push="$(
-    python3 - "$body" <<'PY'
-import json, sys
-from pathlib import Path
-data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-p = data.get("permissions") or {}
-print("true" if (p.get("admin") or p.get("maintain") or p.get("push")) else "false")
-PY
-  )" || push="false"
-  rm -f "$body"
-  [[ "$push" == "true" ]]
+  python3 "$PROBE_PY" check "$full" >/dev/null 2>&1
 }
 
 if [[ ${#REPOS[@]} -eq 0 ]]; then

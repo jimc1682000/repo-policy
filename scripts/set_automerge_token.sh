@@ -22,6 +22,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROBE_PY="$ROOT/scripts/lib/pat_probe.py"
 CONSUMERS_FILE="${CONSUMERS_FILE:-$ROOT/consumers.yml}"
 SECRET_NAME="${SECRET_NAME:-AUTOMERGE_TOKEN}"
 OWNER_FILTER="${OWNER_FILTER:-}" # empty = no filter; e.g. jimc1682000
@@ -44,7 +45,7 @@ Set AUTOMERGE_TOKEN secret on repos the PAT can access (token never printed).
 
 Discovery (fine-grained safe):
   candidates ← gh login (owner/collab repos) | CLI | --from-consumers
-  targets    ← candidates where PAT has push|maintain|admin (curl Bearer probe)
+  targets    ← candidates where PAT can POST git/blobs (Contents: write)
 
 Flags:
   --dry-run            list targets only
@@ -89,6 +90,18 @@ if [[ -z "${AUTOMERGE_TOKEN:-}" ]]; then
   echo "error: AUTOMERGE_TOKEN is unset." >&2
   echo "Set it from your password manager, then re-run. Do not pass the token as a CLI argument." >&2
   exit 1
+fi
+
+if [[ ! -f "$PROBE_PY" ]]; then
+  echo "error: missing probe helper: $PROBE_PY" >&2
+  exit 1
+fi
+
+TOKEN_KIND="$(python3 "$PROBE_PY" kind)"
+echo "token kind: $TOKEN_KIND"
+if [[ "$TOKEN_KIND" == "classic" ]]; then
+  echo "note: classic PAT (ghp_*) with repo scope can access nearly all your repos;" >&2
+  echo "      fine-grained (github_pat_*) + Only select is required for a short allow-list." >&2
 fi
 
 if [[ -z "$OWNER_FILTER" ]]; then
@@ -139,37 +152,10 @@ PY
 }
 
 pat_can_access() {
-  # Probe with curl + Bearer ONLY. Do not use `gh api` here: even with
-  # GH_TOKEN=…, gh may still use keyring credentials (owner → admin on every
-  # owned repo), which falsely marks all public/private owned repos as allowed.
-  #
-  # Public metadata is world-readable; require push|maintain|admin from the
-  # *PAT's* permission object (fine-grained Contents: write on selected repos).
+  # Owner fine-grained PATs lie on GET /repos permissions (always admin on owned
+  # public repos). Prove Contents: write via orphan git blob create instead.
   local full="$1"
-  local body code push
-  body="$(mktemp)"
-  code="$(
-    curl -sS -o "$body" -w '%{http_code}' \
-      -H "Authorization: Bearer ${AUTOMERGE_TOKEN}" \
-      -H "Accept: application/vnd.github+json" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "https://api.github.com/repos/${full}"
-  )" || code="000"
-  if [[ "$code" != "200" ]]; then
-    rm -f "$body"
-    return 1
-  fi
-  push="$(
-    python3 - "$body" <<'PY'
-import json, sys
-from pathlib import Path
-data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-p = data.get("permissions") or {}
-print("true" if (p.get("admin") or p.get("maintain") or p.get("push")) else "false")
-PY
-  )" || push="false"
-  rm -f "$body"
-  [[ "$push" == "true" ]]
+  python3 "$PROBE_PY" check "$full" >/dev/null 2>&1
 }
 
 if [[ ${#REPOS[@]} -eq 0 ]]; then
