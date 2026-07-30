@@ -49,14 +49,17 @@ python scripts/repository_settings.py \
 ```
 
 未帶 `--repo` 時會處理 inventory 中所有 `manage: true` 的 repositories。初期應逐一
-導入；確認 profile 與 required check 正確後，才進行批次 apply。
+導入；確認 profile 與 required check 正確後，才進行批次 apply。只有 inventory 明確
+設定 `apply: true` 的 repository 可以寫入；任何 audit-only repository 都會讓整次 apply
+失敗，不會被靜默略過。
 
 ## 新增 Repository
 
-1. 在 inventory 新增 repository，先設 `manage: false`。
+1. 在 inventory 新增 repository，設 `manage: true`、`apply: false`。
 2. 選擇既有 profile，或在 policy 新增所需 required checks。
-3. 改成 `manage: true` 並執行 report-only。
-4. 解決所有 `BLOCKED`，審閱 `DRIFT` 後才 apply。
+3. 執行 report-only，解決所有 `BLOCKED` 並審閱 `DRIFT`。
+4. 取得 apply 核准後，才把 `apply` 改成 `true`。
 
-敏感 repository 可保留 `manage: false`，或使用 repository-level overrides 放寬或收緊
-merge 與 security settings。
+不納管的 repository 使用 `manage: false`；需要長期 audit-only 的 repository 維持
+`manage: true`、`apply: false`。Repository-level overrides 可放寬或收緊 merge 與
+security settings。

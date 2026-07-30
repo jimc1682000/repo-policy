@@ -37,3 +37,7 @@ profiles:
   python:
     required_status_checks:
       - test
+  astro:
+    required_status_checks:
+      - lint + format（硬性）
+      - microformats2（硬性）

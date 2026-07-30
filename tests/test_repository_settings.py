@@ -5,6 +5,7 @@ from scripts.repository_settings import (
     desired_state,
     render_report,
     select_like,
+    validate_apply_scope,
     validate_configuration,
     verify_actor,
 )
@@ -25,6 +26,7 @@ INVENTORY = {
         {
             "repo": "app",
             "manage": True,
+            "apply": True,
             "profile": "python",
             "default_branch": "main",
         }
@@ -36,6 +38,7 @@ def test_desired_state_adds_profile_checks_without_mutating_policy():
     desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
 
     assert desired["owner"] == "example"
+    assert desired["apply_enabled"] is True
     assert desired["ruleset"]["rules"][-1] == {
         "type": "required_status_checks",
         "parameters": {
@@ -55,6 +58,16 @@ def test_validate_configuration_rejects_unknown_profile():
 
     with pytest.raises(ValueError, match="unknown profile"):
         validate_configuration(POLICY, inventory)
+
+
+def test_validate_apply_scope_rejects_audit_only_repository():
+    with pytest.raises(ValueError, match="apply is disabled.*docs"):
+        validate_apply_scope(
+            [
+                {"repo": "app", "apply": True},
+                {"repo": "docs", "apply": False},
+            ]
+        )
 
 
 def test_select_like_ignores_server_fields_and_matches_rules_by_type():

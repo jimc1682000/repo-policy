@@ -3,6 +3,14 @@ owner: jimc1682000
 repositories:
   - repo: fhr
     manage: true
+    apply: true
     profile: python
     default_branch: main
-    notes: "第一個中央管理 pilot；先 report-only，核准後才 apply"
+    notes: "第一個中央管理 repository；已 apply"
+
+  - repo: jimc1682000.github.io
+    manage: true
+    apply: false
+    profile: astro
+    default_branch: master
+    notes: "Astro／Node.js pilot；目前只允許 report-only"
