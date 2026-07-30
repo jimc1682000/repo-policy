@@ -126,6 +126,21 @@ def select_like(current: Any, desired: Any) -> Any:
             return [
                 select_like(by_type.get(value["type"], {}), value) for value in desired
             ]
+        if desired and all(isinstance(value, dict) for value in desired):
+            if all("context" in value for value in desired):
+                by_context = {
+                    value.get("context"): value
+                    for value in current
+                    if isinstance(value, dict)
+                }
+                return [
+                    select_like(by_context.get(value["context"], {}), value)
+                    for value in desired
+                ]
+            return [
+                select_like(current[index] if index < len(current) else {}, value)
+                for index, value in enumerate(desired)
+            ]
         return current
     return current
 
