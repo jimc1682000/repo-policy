@@ -1,6 +1,7 @@
 # repo-policy
 
-共用 GitHub repo 設定：PR risk classification / low-risk automerge、Renovate preset。
+共用 GitHub repo 設定：PR risk classification / low-risk automerge、Renovate preset，
+以及個人帳號 repositories 的 security / quality desired-state 管理。
 
 各 consumer repo **不要**複製整份 merge 邏輯，只留 thin wrapper workflow + 可選 override YAML。
 
@@ -19,6 +20,29 @@
 | `scripts/check_automerge_token.sh` | 同上過濾後檢查 secret 名稱是否存在 |
 | `scripts/scaffold_consumer.sh` | 產生 thin wrapper 範本 |
 | `scripts/list_consumers.sh` | 列出 adopt / wrapper 狀態 |
+| `policies/repository-settings.yml` | 共用 security / merge baseline 與技術棧 profiles |
+| `repositories.yml` | 中央管理 inventory；初期只納管 FHR |
+| `scripts/repository_settings.py` | 預設 report-only 的 GitHub settings reconciler |
+| `docs/personal-account-control-plane.md` | report / apply / 新增 repository 操作手冊 |
+
+## 個人帳號中央管理
+
+個人帳號沒有 Organization 層級的設定繼承，因此以 desired-state reconciliation 補足：
+
+```bash
+# 預設只讀，不修改 GitHub
+python scripts/repository_settings.py --repo fhr
+
+# 審閱 report 後才可明確 apply
+python scripts/repository_settings.py \
+  --repo fhr \
+  --apply \
+  --confirm-owner jimc1682000
+```
+
+目前 inventory 只啟用 FHR pilot。同步程式不管理刪除、visibility、collaborator 或
+secret，且 apply 前會確認 required checks 已在 default branch 出現。完整流程見
+[`docs/personal-account-control-plane.md`](docs/personal-account-control-plane.md)。
 
 ## 風險原則
 

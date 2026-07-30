@@ -1,0 +1,8 @@
+owner: jimc1682000
+
+repositories:
+  - repo: fhr
+    manage: true
+    profile: python
+    default_branch: main
+    notes: "第一個中央管理 pilot；先 report-only，核准後才 apply"
