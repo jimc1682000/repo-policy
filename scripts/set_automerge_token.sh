@@ -1,48 +1,59 @@
 #!/usr/bin/env bash
 # Set AUTOMERGE_TOKEN on repos the PAT is allowed to access.
-# Targets come from the token itself (fine-grained "Only select repositories"),
-# not a hardcoded inventory. consumers.yml is only used with --from-consumers.
+#
+# Fine-grained PATs cannot call GET /user/repos (HTTP 403). Discovery is:
+#   1) candidate list = your logged-in `gh` identity (owned/collab repos), or CLI args,
+#      or --from-consumers
+#   2) filter = probe each repo with AUTOMERGE_TOKEN (Metadata/Contents access)
 #
 # Usage:
 #   export AUTOMERGE_TOKEN='…'   # required; never pass as CLI arg / never echo
-#   ./scripts/set_automerge_token.sh              # default: all repos this PAT can access
 #   ./scripts/set_automerge_token.sh --dry-run
-#   ./scripts/set_automerge_token.sh film-brain   # explicit subset (must still be PAT-allowed)
-#   ./scripts/set_automerge_token.sh --from-consumers   # optional: consumers.yml secret_managed
+#   ./scripts/set_automerge_token.sh
+#   ./scripts/set_automerge_token.sh film-brain other-repo
+#   ./scripts/set_automerge_token.sh --from-consumers
 #
 # Auth split:
-#   - List targets: GH_TOKEN=AUTOMERGE_TOKEN (what the PAT is allowed to see)
-#   - gh secret set: your logged-in `gh` user (needs admin on each repo)
+#   - Candidate list + gh secret set: logged-in `gh` user (admin for secret write)
+#   - Access filter: AUTOMERGE_TOKEN
 #
-# Requires: gh, python3
+# Requires: gh, python3 (only for --from-consumers)
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONSUMERS_FILE="${CONSUMERS_FILE:-$ROOT/consumers.yml}"
 SECRET_NAME="${SECRET_NAME:-AUTOMERGE_TOKEN}"
+OWNER_FILTER="${OWNER_FILTER:-}" # empty = no filter; e.g. jimc1682000
 DRY_RUN=0
 FROM_CONSUMERS=0
 INCLUDE_FORKS=0
 INCLUDE_ARCHIVED=0
+SKIP_PROBE=0
 REPOS=()
 
 usage() {
   cat <<'EOF'
-Set AUTOMERGE_TOKEN secret on repos (token value never printed).
+Set AUTOMERGE_TOKEN secret on repos the PAT can access (token never printed).
 
   export AUTOMERGE_TOKEN='…'
-  ./scripts/set_automerge_token.sh              # repos this PAT can access
   ./scripts/set_automerge_token.sh --dry-run
-  ./scripts/set_automerge_token.sh repo1 repo2  # explicit list
+  ./scripts/set_automerge_token.sh
+  ./scripts/set_automerge_token.sh film-brain
   ./scripts/set_automerge_token.sh --from-consumers
 
+Discovery (fine-grained safe):
+  candidates ← gh login (owner/collab repos) | CLI | --from-consumers
+  targets    ← candidates the PAT can open via GET /repos/{owner}/{repo}
+
 Flags:
-  --dry-run           list targets only
-  --from-consumers    use consumers.yml (secret_managed) instead of PAT access list
-  --include-forks     keep forks when discovering via PAT
-  --include-archived  keep archived when discovering via PAT
-  --consumers FILE    path to consumers.yml (with --from-consumers)
+  --dry-run            list targets only
+  --from-consumers     candidates from consumers.yml (secret_managed)
+  --owner LOGIN        only candidates under this owner (default: autodetect gh user)
+  --include-forks
+  --include-archived
+  --skip-probe         do not filter with PAT (write to all candidates; not recommended)
+  --consumers FILE
 EOF
   exit "${1:-0}"
 }
@@ -54,6 +65,11 @@ while [[ $# -gt 0 ]]; do
     --from-consumers) FROM_CONSUMERS=1; shift ;;
     --include-forks) INCLUDE_FORKS=1; shift ;;
     --include-archived) INCLUDE_ARCHIVED=1; shift ;;
+    --skip-probe) SKIP_PROBE=1; shift ;;
+    --owner)
+      OWNER_FILTER="$2"
+      shift 2
+      ;;
     --consumers)
       CONSUMERS_FILE="$2"
       shift 2
@@ -75,15 +91,18 @@ if [[ -z "${AUTOMERGE_TOKEN:-}" ]]; then
   exit 1
 fi
 
-list_repos_from_pat() {
-  # Use the PAT only for discovery. Do not print token. Paginate full_name list.
-  # Fine-grained PATs: GitHub returns only repositories the token may access.
-  local include_forks="$1"
-  local include_archived="$2"
-  GH_TOKEN="$AUTOMERGE_TOKEN" gh api user/repos --paginate \
-    -f per_page=100 \
-    -f affiliation=owner,collaborator,organization_member \
-    --jq '.[] | [.full_name, (.fork|tostring), (.archived|tostring)] | @tsv' \
+if [[ -z "$OWNER_FILTER" ]]; then
+  OWNER_FILTER="$(gh api user --jq .login)"
+fi
+
+list_candidates_from_gh_login() {
+  # Use interactive/user gh auth — fine-grained PAT is NOT used here.
+  local owner="$1"
+  local include_forks="$2"
+  local include_archived="$3"
+  # gh repo list is reliable for personal accounts; paginate via --limit high
+  gh repo list "$owner" --limit 1000 --json nameWithOwner,isFork,isArchived \
+    --jq '.[] | [.nameWithOwner, (.isFork|tostring), (.isArchived|tostring)] | @tsv' \
     | while IFS=$'\t' read -r full fork archived; do
         if [[ "$include_forks" -eq 0 && "$fork" == "true" ]]; then
           continue
@@ -95,7 +114,7 @@ list_repos_from_pat() {
       done
 }
 
-list_repos_from_consumers() {
+list_candidates_from_consumers() {
   python3 - "$CONSUMERS_FILE" <<'PY'
 import sys
 from pathlib import Path
@@ -119,55 +138,96 @@ for c in data.get("consumers") or []:
 PY
 }
 
+pat_can_access() {
+  # Metadata is always granted on selected repos for fine-grained PATs.
+  local full="$1"
+  GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" --jq .full_name >/dev/null 2>&1
+}
+
 if [[ ${#REPOS[@]} -eq 0 ]]; then
   if [[ "$FROM_CONSUMERS" -eq 1 ]]; then
     if [[ ! -f "$CONSUMERS_FILE" ]]; then
       echo "error: consumers file missing: $CONSUMERS_FILE" >&2
       exit 1
     fi
-    echo "source: consumers.yml ($CONSUMERS_FILE)"
-    mapfile -t REPOS < <(list_repos_from_consumers)
+    echo "candidates: consumers.yml ($CONSUMERS_FILE)"
+    mapfile -t REPOS < <(list_candidates_from_consumers)
   else
-    echo "source: repositories accessible to AUTOMERGE_TOKEN (fine-grained allow-list)"
-    mapfile -t REPOS < <(list_repos_from_pat "$INCLUDE_FORKS" "$INCLUDE_ARCHIVED")
+    echo "candidates: repos under owner '$OWNER_FILTER' via gh login (not the PAT)"
+    mapfile -t REPOS < <(list_candidates_from_gh_login "$OWNER_FILTER" "$INCLUDE_FORKS" "$INCLUDE_ARCHIVED")
   fi
 else
-  echo "source: CLI arguments"
+  echo "candidates: CLI arguments"
 fi
 
 if [[ ${#REPOS[@]} -eq 0 ]]; then
-  echo "error: no target repositories." >&2
-  echo "If using a fine-grained PAT, edit the token → Repository access → select repos, then retry." >&2
+  echo "error: no candidate repositories" >&2
   exit 1
 fi
 
-# Normalize to owner/name
-NORMALIZED=()
+# Normalize
+CANDIDATES=()
 for r in "${REPOS[@]}"; do
   r="${r//$'\r'/}"
   [[ -n "$r" ]] || continue
   if [[ "$r" == */* ]]; then
-    NORMALIZED+=("$r")
+    CANDIDATES+=("$r")
   else
-    NORMALIZED+=("jimc1682000/$r")
+    CANDIDATES+=("${OWNER_FILTER}/$r")
   fi
 done
+mapfile -t CANDIDATES < <(printf '%s\n' "${CANDIDATES[@]}" | awk 'NF && !seen[$0]++')
 
-# De-dupe while preserving order
-mapfile -t NORMALIZED < <(printf '%s\n' "${NORMALIZED[@]}" | awk 'NF && !seen[$0]++')
+echo "probing PAT access on ${#CANDIDATES[@]} candidate(s)…"
+
+NORMALIZED=()
+SKIPPED=()
+if [[ "$SKIP_PROBE" -eq 1 ]]; then
+  echo "warning: --skip-probe set; not filtering by PAT access" >&2
+  NORMALIZED=("${CANDIDATES[@]}")
+else
+  for r in "${CANDIDATES[@]}"; do
+    if pat_can_access "$r"; then
+      NORMALIZED+=("$r")
+    else
+      SKIPPED+=("$r")
+    fi
+  done
+fi
+
+if [[ ${#NORMALIZED[@]} -eq 0 ]]; then
+  echo "error: PAT cannot access any candidate repo." >&2
+  echo "Edit the fine-grained PAT → Repository access → select the repos you want, then retry." >&2
+  if [[ ${#SKIPPED[@]} -gt 0 ]]; then
+    echo "probed (no access): ${#SKIPPED[@]} repos (e.g. ${SKIPPED[0]})" >&2
+  fi
+  exit 1
+fi
 
 echo "secret name: $SECRET_NAME"
-echo "targets (${#NORMALIZED[@]}):"
+echo "targets (${#NORMALIZED[@]} PAT-allowed):"
 for r in "${NORMALIZED[@]}"; do
   echo "  - $r"
 done
+if [[ ${#SKIPPED[@]} -gt 0 ]]; then
+  echo "skipped (${#SKIPPED[@]} not in PAT allow-list / no access):"
+  # show at most 20 to keep output short
+  i=0
+  for r in "${SKIPPED[@]}"; do
+    echo "  - $r"
+    i=$((i + 1))
+    if [[ "$i" -ge 20 ]]; then
+      echo "  … and $((${#SKIPPED[@]} - 20)) more"
+      break
+    fi
+  done
+fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "dry-run: no secrets written"
   exit 0
 fi
 
-# secret set uses your interactive gh login (admin), not the PAT
 ok=0
 fail=0
 for r in "${NORMALIZED[@]}"; do

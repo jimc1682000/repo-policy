@@ -40,30 +40,35 @@ Reusable workflow 內：`secrets.token || github.token`。
 
 腳本：[`scripts/set_automerge_token.sh`](../scripts/set_automerge_token.sh)
 
-**預設會用 PAT 自己去列「它被允許存取的 repos」**（fine-grained Only select），再對那些 repo 設 secret。  
-**不會**硬編碼 `consumers.yml`。`consumers.yml` 只是「建議誰該接 wrapper」的 inventory。
+Fine-grained PAT **不能**可靠呼叫 `GET /user/repos`（常直接 HTTP 403）。腳本因此用兩段式：
 
-權限分開：
+1. **候選清單**：本機已 login 的 `gh`（你帳號下的 repo），或 CLI / `--from-consumers`  
+2. **過濾**：對每個候選用 `AUTOMERGE_TOKEN` 打 `GET /repos/{owner}/{repo}`——成功 = PAT allow-list 有勾  
+
+**不會**硬編碼 repo 名單。`consumers.yml` 只是「建議誰該接 wrapper」。
 
 | 動作 | 用誰的憑證 |
 |------|------------|
-| 列出 PAT 允許的 repo | `AUTOMERGE_TOKEN` |
-| `gh secret set`（寫 secret） | 你本機已 login 的 `gh`（repo admin） |
+| 列候選 repo | 本機 `gh` login |
+| 判斷 PAT 能否存取 | `AUTOMERGE_TOKEN` |
+| `gh secret set` | 本機 `gh` login（repo admin） |
 
 ```bash
 # 從密碼管理器注入後執行（勿 echo token）
 export AUTOMERGE_TOKEN='…'
 
-# 預設：PAT allow-list 上的所有非 fork / 非 archived repo
+# 預設：你的 repo × PAT 有權限的交集
 ./scripts/set_automerge_token.sh --dry-run
 ./scripts/set_automerge_token.sh
 
-# 或只寫其中幾個（仍建議是 PAT 有勾的）
+# 或只寫其中幾個
 ./scripts/set_automerge_token.sh film-brain jimc1682000.github.io
 
-# 可選：改讀 consumers.yml（舊行為 / 對帳用）
+# 可選：候選改讀 consumers.yml，仍用 PAT probe
 ./scripts/set_automerge_token.sh --from-consumers --dry-run
 ```
+
+若 dry-run 顯示 `PAT cannot access any candidate`：到 GitHub 編輯 PAT → **Repository access** 勾選 repo 後重跑。
 
 1Password（有 CLI 時）：
 

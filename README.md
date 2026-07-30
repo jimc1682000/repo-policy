@@ -15,8 +15,8 @@
 | `tests/` | classification 與 guard unit tests |
 | `consumers.yml` | 建議接入的 consumer 清單（非全部個人 repo） |
 | `docs/pat-automerge-token.md` | PAT 一年輪替 runbook |
-| `scripts/set_automerge_token.sh` | 對 **PAT 允許的 repos** 寫入 `AUTOMERGE_TOKEN`（不印 token） |
-| `scripts/check_automerge_token.sh` | 用同一 PAT allow-list 檢查 secret 名稱是否存在 |
+| `scripts/set_automerge_token.sh` | 候選=gh login；過濾=PAT probe；寫入 secret（不印 token） |
+| `scripts/check_automerge_token.sh` | 同上過濾後檢查 secret 名稱是否存在 |
 | `scripts/scaffold_consumer.sh` | 產生 thin wrapper 範本 |
 | `scripts/list_consumers.sh` | 列出 adopt / wrapper 狀態 |
 
