@@ -13,6 +13,12 @@
 | `policies/pr-automerge.yml` | 預設風險規則 |
 | `renovate/default.json` | Renovate shared preset（`extends`） |
 | `tests/` | classification 與 guard unit tests |
+| `consumers.yml` | 建議接入的 consumer 清單（非全部個人 repo） |
+| `docs/pat-automerge-token.md` | PAT 一年輪替 runbook |
+| `scripts/set_automerge_token.sh` | 批次寫入 `AUTOMERGE_TOKEN`（不印 token） |
+| `scripts/check_automerge_token.sh` | 檢查各 consumer secret 是否存在 |
+| `scripts/scaffold_consumer.sh` | 產生 thin wrapper 範本 |
+| `scripts/list_consumers.sh` | 列出 adopt / wrapper 狀態 |
 
 ## 風險原則
 
@@ -90,7 +96,9 @@ jobs:
       token: ${{ secrets.AUTOMERGE_TOKEN }}
 ```
 
-> `AUTOMERGE_TOKEN` 可選。未設定時 reusable workflow 會 fallback 到 `github.token`（需上述 permissions）。若要用 PAT 跨 check 限制，再設 repo secret。
+> `AUTOMERGE_TOKEN` 可選（fine-grained PAT，建議 1 年到期、Only select repos）。未設定時 fallback `github.token`。
+>
+> 建立 / 一年輪替：見 [docs/pat-automerge-token.md](docs/pat-automerge-token.md) 與 `scripts/set_automerge_token.sh`。
 
 ### 2. Repo-specific override（可選）
 
@@ -154,6 +162,37 @@ export PR_NUMBER=123
 export GITHUB_ACTOR=github-actions[bot]
 python scripts/pr_merge_automation.py
 ```
+
+
+
+## 哪些 repo 該接入？
+
+**不是**帳號下每個 repo 都要開。見 [`consumers.yml`](consumers.yml)：
+
+| 建議 adopt | 跳過 |
+|------------|------|
+| 有在維護、會開 PR / Dependabot / Renovate 的 active repo | 過期 `*Lab`、fork、archived、純 backup dump |
+| `film-brain`、`dotfiles`、`my-kb`、sites、小工具、copier 模板 | `repo-policy` 自身（先避免 self-loop）、agent workspace 需人工評估者 |
+
+```bash
+./scripts/list_consumers.sh          # inventory + 是否已有 wrapper
+./scripts/scaffold_consumer.sh fhr --default-branch main --write /path/to/fhr --with-override
+./scripts/set_automerge_token.sh --dry-run
+# export AUTOMERGE_TOKEN from password manager first:
+./scripts/set_automerge_token.sh
+./scripts/check_automerge_token.sh
+```
+
+接入後開 PR 合併 wrapper；`pull_request_target` 要 default branch 上有 workflow 才會事件驅動。
+
+## PAT 輪替（一年）
+
+1. GitHub 重生 fine-grained PAT（Only select + Contents/PR write）  
+2. `export AUTOMERGE_TOKEN=…` → `./scripts/set_automerge_token.sh`  
+3. 任一 consumer dry-run workflow  
+4. Revoke 舊 PAT  
+
+詳見 [docs/pat-automerge-token.md](docs/pat-automerge-token.md)。PAT **無法**自動 renew。
 
 ## 固定 ref
 

@@ -1,0 +1,143 @@
+# Consumer inventory for jimc1682000/repo-policy PR automerge.
+# adopt: whether this repo should run the thin wrapper + optional PAT secret.
+# secret_managed: include in set_automerge_token.sh default target list.
+#
+# Not every personal repo should adopt: skip forks, archived, dead labs,
+# pure dumps with no PR flow.
+
+owner: jimc1682000
+policy_ref: v1
+secret_name: AUTOMERGE_TOKEN
+
+consumers:
+  # --- already on / primary ---
+  - repo: film-brain
+    adopt: true
+    secret_managed: true
+    default_branch: master
+    notes: "Live; first consumer. Override under .github/policies/"
+
+  - repo: jimc1682000.github.io
+    adopt: true
+    secret_managed: true
+    default_branch: master
+    notes: "Site + Dependabot; good candidate"
+
+  - repo: fhr
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Active Python tool"
+
+  - repo: resume
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "VitePress site; deps PRs"
+
+  - repo: dotfiles
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Private; high-value; tighten override paths if needed"
+
+  - repo: my-kb
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Private KB; mostly docs — low-risk docs merge is useful"
+
+  - repo: my-tf
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "IaC — keep high-risk paths broad; rarely auto-merge non-deps"
+
+  - repo: devops-ai-toolkit
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Private toolkit"
+
+  - repo: cdn-traffic-report
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Active report tooling"
+
+  - repo: hackathon-ai-film-library
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Sibling of film-brain; similar override shape"
+
+  - repo: akamai-reports
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "If still receiving dep PRs"
+
+  - repo: s3-scripts
+    adopt: true
+    secret_managed: true
+    default_branch: master
+    notes: "Small scripts; optional"
+
+  - repo: copier-base
+    adopt: true
+    secret_managed: true
+    default_branch: main
+    notes: "Template root — automerge helps keep archetype deps green"
+
+  - repo: copier-fullstack
+    adopt: true
+    secret_managed: true
+    default_branch: main
+
+  - repo: copier-tool
+    adopt: true
+    secret_managed: true
+    default_branch: main
+
+  # --- adopt later / special ---
+  - repo: openclaw-workspace
+    adopt: false
+    secret_managed: false
+    default_branch: master
+    notes: "VPS-canonical agent workspace; review manually before adopt"
+
+  - repo: my-nb
+    adopt: true
+    secret_managed: true
+    default_branch: master
+    notes: "Notes repo; low change volume"
+
+  - repo: my-openclaw-backup
+    adopt: false
+    secret_managed: false
+    default_branch: main
+    notes: "Backup dump; little PR value"
+
+  - repo: my-social-network-backup
+    adopt: false
+    secret_managed: false
+    default_branch: master
+    notes: "Backup dump"
+
+  - repo: hackathon-db-backup
+    adopt: false
+    secret_managed: false
+    default_branch: main
+    notes: "SQL dumps"
+
+  - repo: repo-policy
+    adopt: false
+    secret_managed: false
+    default_branch: main
+    notes: "Policy source itself; CI only — avoid self-merge loops for now"
+
+  # --- skip: school labs / stale / no PR workflow ---
+  - repo: "*"
+    adopt: false
+    secret_managed: false
+    notes: "Default for *Lab, ancient courseware, forks, archived — do not bulk-enable"
