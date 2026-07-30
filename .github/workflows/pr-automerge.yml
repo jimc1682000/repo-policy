@@ -72,7 +72,7 @@ jobs:
       POLICY_PATH: repo-policy/policies/pr-automerge.yml
     steps:
       - name: Checkout policy repo (script + default policy only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ inputs.policy_repository }}
           ref: ${{ inputs.policy_ref }}
@@ -81,7 +81,7 @@ jobs:
 
       - name: Checkout caller default-branch override (no PR head)
         if: inputs.policy_override_path != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.event.repository.default_branch || inputs.default_branch }}

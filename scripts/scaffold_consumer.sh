@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO=""
 DEFAULT_BRANCH="main"
-POLICY_REF="v1"
+POLICY_REF="v1.1"
 AUTHORS="github-actions[bot],jimc1682000"
 WRITE_DIR=""
 WITH_OVERRIDE=0

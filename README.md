@@ -84,10 +84,10 @@ permissions:
 
 jobs:
   evaluate:
-    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1
+    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.1
     with:
       default_branch: master
-      policy_ref: v1
+      policy_ref: v1.1
       pr_number: ${{ github.event.pull_request.number || '' }}
       policy_override_path: .github/policies/pr-automerge.yml
       automation_comment_authors: github-actions[bot],YOUR_GITHUB_LOGIN
@@ -202,10 +202,10 @@ unset AUTOMERGE_TOKEN
 生產環境建議 pin：
 
 ```yaml
-uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1
+uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.1
 # 並傳
 with:
-  policy_ref: v1
+  policy_ref: v1.1
 ```
 
 `main` 適合個人 repo 快速迭代；對外或高敏感 repo 請 pin tag / commit SHA。
