@@ -43,11 +43,13 @@ Reusable workflow 內：`secrets.token || github.token`。
 Fine-grained PAT **不能**可靠呼叫 `GET /user/repos`（常直接 HTTP 403）。腳本因此用兩段式：
 
 1. **候選清單**：本機已 login 的 `gh`（你帳號下的 repo），或 CLI / `--from-consumers`  
-2. **過濾**：用 `AUTOMERGE_TOKEN` 打 `GET /repos/{owner}/{repo}`，且  
-   **`permissions.push|maintain|admin` 為 true**  
+2. **過濾**：用 **curl + `Authorization: Bearer $AUTOMERGE_TOKEN`**（不用 `gh api`，避免 keyring 蓋掉 PAT）  
+   且 **`permissions.push|maintain|admin` 為 true**  
 
-> 注意：公開 repo 的 metadata **任何人都能讀**，光 API 200 不代表 PAT 有勾該 repo。  
-> 必須看 write 向 permission，才對齊 fine-grained「Only select repositories」+ Contents write。
+> 注意兩件事：  
+> 1. 公開 repo metadata 任何人都能讀 → 不能只看 HTTP 200。  
+> 2. `GH_TOKEN=pat gh api …` 有時仍用本機 `gh` login（owner 對自己 repo 全是 admin）→ 會誤判 55 個全過。  
+> 腳本改為 curl Bearer-only probe。
 
 **不會**硬編碼 repo 名單。`consumers.yml` 只是「建議誰該接 wrapper」。
 

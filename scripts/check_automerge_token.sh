@@ -48,15 +48,31 @@ if [[ -z "$OWNER_FILTER" ]]; then
 fi
 
 pat_can_access() {
-  # Public repo metadata is readable without being on the PAT allow-list.
-  # Treat as allowed only when the PAT has push/maintain/admin on the repo.
+  # curl + Bearer only — never `gh api` (keyring can override GH_TOKEN).
   local full="$1"
-  local push
+  local body code push
+  body="$(mktemp)"
+  code="$(
+    curl -sS -o "$body" -w '%{http_code}' \
+      -H "Authorization: Bearer ${AUTOMERGE_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/repos/${full}"
+  )" || code="000"
+  if [[ "$code" != "200" ]]; then
+    rm -f "$body"
+    return 1
+  fi
   push="$(
-    GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" \
-      --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)' \
-      2>/dev/null || echo false
-  )"
+    python3 - "$body" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+p = data.get("permissions") or {}
+print("true" if (p.get("admin") or p.get("maintain") or p.get("push")) else "false")
+PY
+  )" || push="false"
+  rm -f "$body"
   [[ "$push" == "true" ]]
 }
 

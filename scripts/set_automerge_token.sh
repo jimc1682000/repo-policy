@@ -44,7 +44,7 @@ Set AUTOMERGE_TOKEN secret on repos the PAT can access (token never printed).
 
 Discovery (fine-grained safe):
   candidates ← gh login (owner/collab repos) | CLI | --from-consumers
-  targets    ← candidates the PAT can open via GET /repos/{owner}/{repo}
+  targets    ← candidates where PAT has push|maintain|admin (curl Bearer probe)
 
 Flags:
   --dry-run            list targets only
@@ -139,16 +139,36 @@ PY
 }
 
 pat_can_access() {
-  # IMPORTANT: GET /repos/{owner}/{repo} succeeds for ANY public repo even when
-  # the fine-grained PAT did not select it (public metadata is world-readable).
-  # Require write-capable repo permission (Contents: write → push/maintain/admin).
+  # Probe with curl + Bearer ONLY. Do not use `gh api` here: even with
+  # GH_TOKEN=…, gh may still use keyring credentials (owner → admin on every
+  # owned repo), which falsely marks all public/private owned repos as allowed.
+  #
+  # Public metadata is world-readable; require push|maintain|admin from the
+  # *PAT's* permission object (fine-grained Contents: write on selected repos).
   local full="$1"
-  local push
+  local body code push
+  body="$(mktemp)"
+  code="$(
+    curl -sS -o "$body" -w '%{http_code}' \
+      -H "Authorization: Bearer ${AUTOMERGE_TOKEN}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "https://api.github.com/repos/${full}"
+  )" || code="000"
+  if [[ "$code" != "200" ]]; then
+    rm -f "$body"
+    return 1
+  fi
   push="$(
-    GH_TOKEN="$AUTOMERGE_TOKEN" gh api "repos/$full" \
-      --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)' \
-      2>/dev/null || echo false
-  )"
+    python3 - "$body" <<'PY'
+import json, sys
+from pathlib import Path
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+p = data.get("permissions") or {}
+print("true" if (p.get("admin") or p.get("maintain") or p.get("push")) else "false")
+PY
+  )" || push="false"
+  rm -f "$body"
   [[ "$push" == "true" ]]
 }
 
