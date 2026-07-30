@@ -50,6 +50,17 @@ def test_desired_state_adds_profile_checks_without_mutating_policy():
     assert POLICY["baseline"]["ruleset"]["rules"] == [{"type": "deletion"}]
 
 
+def test_desired_state_applies_repository_override():
+    item = {
+        **INVENTORY["repositories"][0],
+        "overrides": {"repository_settings": {"allow_auto_merge": True}},
+    }
+
+    desired = desired_state(POLICY, INVENTORY, item)
+
+    assert desired["repository_settings"]["allow_auto_merge"] is True
+
+
 def test_validate_configuration_rejects_unknown_profile():
     inventory = {
         **INVENTORY,
