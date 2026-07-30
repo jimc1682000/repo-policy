@@ -15,8 +15,8 @@
 | `tests/` | classification 與 guard unit tests |
 | `consumers.yml` | 建議接入的 consumer 清單（非全部個人 repo） |
 | `docs/pat-automerge-token.md` | PAT 一年輪替 runbook |
-| `scripts/set_automerge_token.sh` | 批次寫入 `AUTOMERGE_TOKEN`（不印 token） |
-| `scripts/check_automerge_token.sh` | 檢查各 consumer secret 是否存在 |
+| `scripts/set_automerge_token.sh` | 對 **PAT 允許的 repos** 寫入 `AUTOMERGE_TOKEN`（不印 token） |
+| `scripts/check_automerge_token.sh` | 用同一 PAT allow-list 檢查 secret 名稱是否存在 |
 | `scripts/scaffold_consumer.sh` | 產生 thin wrapper 範本 |
 | `scripts/list_consumers.sh` | 列出 adopt / wrapper 狀態 |
 
@@ -177,10 +177,13 @@ python scripts/pr_merge_automation.py
 ```bash
 ./scripts/list_consumers.sh          # inventory + 是否已有 wrapper
 ./scripts/scaffold_consumer.sh fhr --default-branch main --write /path/to/fhr --with-override
+
+# PAT secret：目標 = PAT 允許的 repos（非硬編碼 consumers.yml）
+export AUTOMERGE_TOKEN='…'           # 從密碼管理器；勿 echo
 ./scripts/set_automerge_token.sh --dry-run
-# export AUTOMERGE_TOKEN from password manager first:
 ./scripts/set_automerge_token.sh
 ./scripts/check_automerge_token.sh
+unset AUTOMERGE_TOKEN
 ```
 
 接入後開 PR 合併 wrapper；`pull_request_target` 要 default branch 上有 workflow 才會事件驅動。
@@ -188,7 +191,7 @@ python scripts/pr_merge_automation.py
 ## PAT 輪替（一年）
 
 1. GitHub 重生 fine-grained PAT（Only select + Contents/PR write）  
-2. `export AUTOMERGE_TOKEN=…` → `./scripts/set_automerge_token.sh`  
+2. `export AUTOMERGE_TOKEN=…` → `./scripts/set_automerge_token.sh`（自動對齊新 PAT 的 repo allow-list）  
 3. 任一 consumer dry-run workflow  
 4. Revoke 舊 PAT  
 

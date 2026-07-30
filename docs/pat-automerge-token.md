@@ -27,7 +27,7 @@ Reusable workflow 內：`secrets.token || github.token`。
 1. 開：https://github.com/settings/personal-access-tokens/new  
 2. Name：`automerge`；Expiration：**1 year**  
 3. Resource owner：你的 user  
-4. Repository access：**Only select repositories** → 勾 `consumers.yml` 裡 `adopt: true` 的 repo  
+4. Repository access：**Only select repositories** → 勾你要 automerge 的 repo（這份 allow-list 就是腳本的目標來源）  
 5. Repository permissions：  
    - Contents: Read and write  
    - Pull requests: Read and write  
@@ -40,33 +40,45 @@ Reusable workflow 內：`secrets.token || github.token`。
 
 腳本：[`scripts/set_automerge_token.sh`](../scripts/set_automerge_token.sh)
 
-```bash
-# 從密碼管理器注入後執行（範例：環境變數已設好，stdout 無 token）
-export AUTOMERGE_TOKEN='…'   # 本機 shell 自己設；勿 echo
+**預設會用 PAT 自己去列「它被允許存取的 repos」**（fine-grained Only select），再對那些 repo 設 secret。  
+**不會**硬編碼 `consumers.yml`。`consumers.yml` 只是「建議誰該接 wrapper」的 inventory。
 
-# 預設：consumers.yml 裡 adopt=true 且 secret_managed=true 的 repo
+權限分開：
+
+| 動作 | 用誰的憑證 |
+|------|------------|
+| 列出 PAT 允許的 repo | `AUTOMERGE_TOKEN` |
+| `gh secret set`（寫 secret） | 你本機已 login 的 `gh`（repo admin） |
+
+```bash
+# 從密碼管理器注入後執行（勿 echo token）
+export AUTOMERGE_TOKEN='…'
+
+# 預設：PAT allow-list 上的所有非 fork / 非 archived repo
+./scripts/set_automerge_token.sh --dry-run
 ./scripts/set_automerge_token.sh
 
-# 或明確指定
+# 或只寫其中幾個（仍建議是 PAT 有勾的）
 ./scripts/set_automerge_token.sh film-brain jimc1682000.github.io
 
-# dry-run：只列會寫哪些 repo
-./scripts/set_automerge_token.sh --dry-run
+# 可選：改讀 consumers.yml（舊行為 / 對帳用）
+./scripts/set_automerge_token.sh --from-consumers --dry-run
 ```
 
 1Password（有 CLI 時）：
 
 ```bash
-# 把 PAT 存在 1Password 後（欄位依你的 item 調整）
 export AUTOMERGE_TOKEN="$(op read 'op://Personal/GitHub automerge PAT/credential')"
 ./scripts/set_automerge_token.sh
 unset AUTOMERGE_TOKEN
 ```
 
-驗證（只看 secret **名稱**是否存在）：
+驗證（只看 secret **名稱**是否存在；同樣用 PAT 列目標）：
 
 ```bash
+export AUTOMERGE_TOKEN='…'
 ./scripts/check_automerge_token.sh
+unset AUTOMERGE_TOKEN
 ```
 
 ## 一年輪替 runbook

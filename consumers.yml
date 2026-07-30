@@ -1,6 +1,7 @@
 # Consumer inventory for jimc1682000/repo-policy PR automerge.
-# adopt: whether this repo should run the thin wrapper + optional PAT secret.
-# secret_managed: include in set_automerge_token.sh default target list.
+# adopt: whether this repo should run the thin wrapper.
+# secret_managed: documentation only — set_automerge_token.sh DEFAULTS to
+#   "repos the PAT can access", not this file. Use --from-consumers to force.
 #
 # Not every personal repo should adopt: skip forks, archived, dead labs,
 # pure dumps with no PR flow.
