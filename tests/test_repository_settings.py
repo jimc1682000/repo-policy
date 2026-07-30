@@ -71,6 +71,17 @@ def test_select_like_ignores_server_fields_and_matches_rules_by_type():
     assert select_like(current, desired) == desired
 
 
+def test_select_like_ignores_integration_id_added_to_required_check():
+    desired = {"required_status_checks": [{"context": "test"}]}
+    current = {
+        "required_status_checks": [
+            {"context": "test", "integration_id": 15368},
+        ]
+    }
+
+    assert select_like(current, desired) == desired
+
+
 def test_apply_refuses_when_audit_has_blockers():
     with pytest.raises(ValueError, match="blockers present"):
         apply_repository(
