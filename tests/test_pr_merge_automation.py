@@ -373,3 +373,130 @@ class TestPolicyLoad:
         over = {"high_risk_dependencies": ["b", "a"]}
         merged = deep_merge_policy(base, over)
         assert merged["high_risk_dependencies"] == ["a", "b"]
+
+class TestUpstreamChangelogDoesNotDecideRisk:
+    """Regression: a grouped patch/minor PR must not inherit "major" from the changelog
+    excerpts Dependabot embeds in the body (jimc1682000.github.io#50)."""
+
+    # Shape copied from a real Dependabot grouped PR: three patch/minor updates, plus a
+    # release-notes block whose commit list mentions an unrelated 71.1.0 → 72.0.0 bump.
+    GROUPED_BODY = """Bumps the minor-and-patch group with 3 updates.
+
+Updates `astro` from 7.1.3 to 7.1.5
+Updates `html-validate` from 11.5.6 to 11.6.0
+Updates `markdownlint-cli2` from 0.23.1 to 0.23.2
+
+<details>
+<summary>Changelog</summary>
+<code>6e3cc93</code> bump eslint-plugin-import from 71.1.0 to 72.0.0
+<code>85bb5e7</code> bump semver from 5.2.1 to 5.2.2
+</details>
+"""
+
+    TRAILER = """updated-dependencies:
+- dependency-name: astro
+  update-type: version-update:semver-patch
+- dependency-name: html-validate
+  update-type: version-update:semver-minor
+- dependency-name: markdownlint-cli2
+  update-type: version-update:semver-patch
+"""
+
+    def test_grouped_patch_minor_with_changelog_major_is_low(self, policy):
+        pr = _pr(
+            title="build(deps): bump the minor-and-patch group with 3 updates",
+            body=self.GROUPED_BODY,
+            files=["package.json", "package-lock.json"],
+            commits=[{"messageBody": self.TRAILER}],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:low"
+        assert d.automerge is True
+
+    def test_declared_trailer_beats_body_prose(self, policy):
+        """Even without clean `Updates` lines, the trailer alone is enough."""
+        pr = _pr(
+            title="build(deps): bump the minor-and-patch group with 3 updates",
+            body="Bumps the group. See <code>abc</code> bump foo from 1.0.0 to 9.0.0 upstream.",
+            files=["package-lock.json"],
+            commits=[{"messageBody": self.TRAILER}],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:low"
+
+    def test_grouped_without_trailer_uses_declared_lines_only(self, policy):
+        pr = _pr(
+            title="build(deps): bump the minor-and-patch group with 3 updates",
+            body=self.GROUPED_BODY,
+            files=["package.json", "package-lock.json"],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:low"
+
+    def test_declared_major_trailer_is_still_high(self, policy):
+        pr = _pr(
+            title="build(deps): bump the minor-and-patch group with 3 updates",
+            body="Updates `typescript` from 6.0.3 to 7.0.2",
+            files=["package.json", "package-lock.json"],
+            commits=[
+                {
+                    "messageBody": (
+                        "updated-dependencies:\n- dependency-name: typescript\n"
+                        "  update-type: version-update:semver-major\n"
+                    )
+                }
+            ],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:high"
+        assert d.automerge is False
+
+    def test_title_only_major_still_detected(self, policy):
+        """Single-dependency PRs may carry no body at all — fall back to the title."""
+        pr = _pr(
+            title="ci: bump actions/download-artifact from 4 to 8",
+            body="",
+            files=[".github/workflows/deploy.yml"],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:high"
+
+    def test_changelog_major_cannot_promote_single_dep_minor(self, policy):
+        pr = _pr(
+            title="build(deps): bump astro from 7.1.3 to 7.1.5",
+            body="Updates `astro` from 7.1.3 to 7.1.5\n\n<code>x</code> bump y from 3.0.0 to 4.0.0",
+            files=["package.json", "package-lock.json"],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:low"
+
+
+class TestRootLevelLockfilesAreInAllowlist:
+    """Regression: "**/package-lock.json" must also cover the repo-root lockfile."""
+
+    def test_root_lockfiles_are_low_risk(self, policy):
+        pr = _pr(
+            title="build(deps): bump the minor-and-patch group with 2 updates",
+            body="Updates `astro` from 7.1.3 to 7.1.5\nUpdates `sharp` from 0.34.1 to 0.34.2",
+            files=["package.json", "package-lock.json"],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:low"
+
+    def test_nested_lockfile_still_matches(self, policy):
+        pr = _pr(
+            title="build(deps): bump astro from 7.1.3 to 7.1.5",
+            body="Updates `astro` from 7.1.3 to 7.1.5",
+            files=["frontend/package.json", "frontend/package-lock.json"],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:low"
+
+    def test_source_file_outside_allowlist_still_medium(self, policy):
+        pr = _pr(
+            title="build(deps): bump astro from 7.1.3 to 7.1.5",
+            body="Updates `astro` from 7.1.3 to 7.1.5",
+            files=["package.json", "src/pages/index.astro"],
+        )
+        d = classify(pr, "master", policy)
+        assert d.risk == "risk:medium"

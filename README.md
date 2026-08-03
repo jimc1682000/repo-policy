@@ -58,6 +58,12 @@ secret，且 apply 前會確認 required checks 已在 default branch 出現。�
 ### `risk:low` 條件（摘要）
 
 - dependency patch/minor、lockfile-only、workflow patch/minor、小幅 docs-only
+  - 版本等級**只認 bot 自己的宣告**：commit trailer 的 `update-type: version-update:semver-*`
+    優先；沒有才退回解析「bot 描述本次更新的那幾行」（`Updates \`pkg\` from X to Y` 與 PR
+    title）。**不掃整份 body** —— 那裡有上游 changelog，裡頭任何一筆 major bump 都會把
+    patch/minor 的群組 PR 誤判成 major（實例：`jimc1682000.github.io#50`）
+  - 檔案 allowlist 的 `**/` 讀作「零層或多層目錄」，所以 repo 根目錄的 `package-lock.json`
+    也在 allowlist 內（純 fnmatch 的 `**/` 需要至少一個 `/`，會漏掉根目錄檔案）
 - required checks 全綠
 - unresolved review threads = 0（GraphQL **分頁查完**）
 - `mergeable`
