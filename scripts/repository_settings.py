@@ -18,6 +18,10 @@ class GitHubError(RuntimeError):
     """Raised when a GitHub API command fails."""
 
 
+class GitHubFeatureUnavailable(GitHubError):
+    """Raised when GitHub explicitly reports a plan-limited feature."""
+
+
 class GitHubClient:
     def request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
@@ -74,8 +78,81 @@ def validate_configuration(policy: dict[str, Any], inventory: dict[str, Any]) ->
             raise ValueError(f"duplicate repository entry: {repo}")
         seen.add(repo)
         profile = item.get("profile")
-        if item.get("manage", False) and profile not in profiles:
+        if profile is not None and profile not in profiles:
             raise ValueError(f"unknown profile for {repo}: {profile}")
+        if item.get("manage", False) and profile is None:
+            raise ValueError(f"unknown profile for {repo}: {profile}")
+
+    discovery = inventory.get("discovery", {})
+    if discovery.get("enabled", False):
+        profile = discovery.get("profile")
+        if profile not in profiles:
+            raise ValueError(f"unknown discovery profile: {profile}")
+
+
+def discover_repositories(
+    client: GitHubClient, inventory: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return every repository owned by the authenticated personal account."""
+    owner = inventory["owner"]
+    repositories: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        batch = client.request(
+            "GET",
+            "/user/repos?affiliation=owner&visibility=all&sort=full_name"
+            f"&direction=asc&per_page=100&page={page}",
+        )
+        for repo in batch:
+            if (repo.get("owner") or {}).get("login") != owner:
+                continue
+            repositories.append(
+                {
+                    "repo": repo["name"],
+                    "manage": True,
+                    "apply": False,
+                    "profile": inventory["discovery"]["profile"],
+                    "default_branch": repo.get("default_branch"),
+                    "classification": (
+                        "archived"
+                        if repo.get("archived")
+                        else "fork"
+                        if repo.get("fork")
+                        else "empty"
+                        if repo.get("pushed_at") is None
+                        else "audit-only"
+                    ),
+                }
+            )
+        if len(batch) < 100:
+            return repositories
+        page += 1
+
+
+def resolve_inventory(
+    client: GitHubClient, inventory: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Merge auto-discovered repositories with explicit inventory overrides."""
+    explicit = {
+        item["repo"]: copy.deepcopy(item) for item in inventory.get("repositories", [])
+    }
+    if not inventory.get("discovery", {}).get("enabled", False):
+        return list(explicit.values())
+
+    resolved: list[dict[str, Any]] = []
+    discovered_names: set[str] = set()
+    for item in discover_repositories(client, inventory):
+        discovered_names.add(item["repo"])
+        item.update(explicit.get(item["repo"], {}))
+        resolved.append(item)
+
+    missing = sorted(set(explicit) - discovered_names)
+    if missing:
+        raise ValueError(
+            "explicit repositories not owned by authenticated owner: "
+            + ", ".join(missing)
+        )
+    return resolved
 
 
 def desired_state(
@@ -106,6 +183,7 @@ def desired_state(
     baseline["default_branch"] = item["default_branch"]
     baseline["profile"] = item["profile"]
     baseline["apply_enabled"] = item.get("apply", False)
+    baseline["classification"] = item.get("classification", "unspecified")
     return baseline
 
 
@@ -157,7 +235,15 @@ def select_like(current: Any, desired: Any) -> Any:
 def find_ruleset(
     client: GitHubClient, owner: str, repo: str, name: str
 ) -> dict[str, Any] | None:
-    rulesets = client.request("GET", f"/repos/{owner}/{repo}/rulesets")
+    try:
+        rulesets = client.request("GET", f"/repos/{owner}/{repo}/rulesets")
+    except GitHubError as error:
+        if (
+            "Upgrade to GitHub Pro or make this repository public to enable this feature"
+            in str(error)
+        ):
+            raise GitHubFeatureUnavailable(str(error)) from error
+        raise
     for ruleset in rulesets:
         if ruleset.get("name") == name and ruleset.get("source_type") == "Repository":
             return client.request(
@@ -197,6 +283,7 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
     info = client.request("GET", f"/repos/{owner}/{repo}")
     blockers: list[str] = []
     changes: list[dict[str, Any]] = []
+    unavailable: list[dict[str, str]] = []
 
     if info.get("default_branch") != desired["default_branch"]:
         blockers.append(
@@ -213,6 +300,15 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
 
     live_security = info.get("security_and_analysis", {}) or {}
     for key, expected in desired["security_and_analysis"].items():
+        if key not in live_security:
+            unavailable.append(
+                {
+                    "area": "security",
+                    "key": key,
+                    "reason": "not returned by repository API",
+                }
+            )
+            continue
         actual = (live_security.get(key) or {}).get("status")
         if actual != expected:
             changes.append(
@@ -220,8 +316,20 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
             )
 
     expected_ruleset = desired["ruleset"]
-    live_ruleset = find_ruleset(client, owner, repo, expected_ruleset["name"])
-    if live_ruleset is None:
+    try:
+        live_ruleset = find_ruleset(client, owner, repo, expected_ruleset["name"])
+    except GitHubFeatureUnavailable:
+        live_ruleset = None
+        unavailable.append(
+            {
+                "area": "ruleset",
+                "key": expected_ruleset["name"],
+                "reason": "GitHub plan limitation",
+            }
+        )
+
+    ruleset_unavailable = any(item["area"] == "ruleset" for item in unavailable)
+    if live_ruleset is None and not ruleset_unavailable:
         changes.append(
             {
                 "area": "ruleset",
@@ -230,7 +338,10 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
                 "to": "create",
             }
         )
-    elif select_like(live_ruleset, expected_ruleset) != expected_ruleset:
+    elif (
+        live_ruleset is not None
+        and select_like(live_ruleset, expected_ruleset) != expected_ruleset
+    ):
         changes.append(
             {
                 "area": "ruleset",
@@ -248,20 +359,28 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
                 for check in rule["parameters"]["required_status_checks"]
             )
     if required_checks:
-        check_runs = list_check_runs(client, owner, repo, desired["default_branch"])
-        observed = {check["name"] for check in check_runs}
-        missing = sorted(set(required_checks) - observed)
-        if missing:
+        if desired["classification"] == "empty":
             blockers.append(
-                f"required checks not observed on default branch: {', '.join(missing)}"
+                "required checks cannot be observed: repository has no commits"
             )
+        else:
+            check_runs = list_check_runs(client, owner, repo, desired["default_branch"])
+            observed = {check["name"] for check in check_runs}
+            missing = sorted(set(required_checks) - observed)
+            if missing:
+                blockers.append(
+                    "required checks not observed on default branch: "
+                    + ", ".join(missing)
+                )
 
     return {
         "repository": f"{owner}/{repo}",
         "profile": desired["profile"],
+        "classification": desired["classification"],
         "apply_enabled": desired["apply_enabled"],
         "changes": changes,
         "blockers": blockers,
+        "unavailable": unavailable,
         "ruleset_id": live_ruleset.get("id") if live_ruleset else None,
     }
 
@@ -277,10 +396,14 @@ def apply_repository(
     areas = {change["area"] for change in audit["changes"]}
     if areas & {"repository", "security"}:
         repo_payload = copy.deepcopy(desired["repository_settings"])
-        repo_payload["security_and_analysis"] = {
-            key: {"status": value}
-            for key, value in desired["security_and_analysis"].items()
+        security_keys = {
+            change["key"] for change in audit["changes"] if change["area"] == "security"
         }
+        if security_keys:
+            repo_payload["security_and_analysis"] = {
+                key: {"status": desired["security_and_analysis"][key]}
+                for key in security_keys
+            }
         client.request("PATCH", f"/repos/{owner}/{repo}", repo_payload)
 
     if "ruleset" in areas:
@@ -299,17 +422,27 @@ def render_report(results: list[dict[str, Any]], applied: bool = False) -> str:
     for result in results:
         lines.append(f"\nRepository: {result['repository']}")
         lines.append(f"Profile: {result['profile']}")
+        lines.append(f"Classification: {result.get('classification', 'unspecified')}")
         lines.append(
             f"Apply: {'enabled' if result.get('apply_enabled', False) else 'disabled'}"
         )
         for blocker in result["blockers"]:
             lines.append(f"BLOCKED {blocker}")
+        for unavailable in result.get("unavailable", []):
+            lines.append(
+                f"UNAVAILABLE {unavailable['area']}.{unavailable['key']}: "
+                f"{unavailable['reason']}"
+            )
         for change in result["changes"]:
             lines.append(
                 f"DRIFT {change['area']}.{change['key']}: "
                 f"{change['from']!r} -> {change['to']!r}"
             )
-        if not result["blockers"] and not result["changes"]:
+        if (
+            not result["blockers"]
+            and not result["changes"]
+            and not result.get("unavailable", [])
+        ):
             lines.append("PASS compliant")
         lines.append(f"Planned changes: {len(result['changes'])}")
     return "\n".join(lines)
@@ -347,9 +480,17 @@ def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> i
         )
         return 2
 
+    client = client or GitHubClient()
+    verify_actor(client, inventory["owner"])
+    try:
+        resolved = resolve_inventory(client, inventory)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
     selected = [
         item
-        for item in inventory.get("repositories", [])
+        for item in resolved
         if item.get("manage", False)
         and (args.repo is None or item["repo"] == args.repo)
     ]
@@ -363,8 +504,6 @@ def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> i
             print(str(error), file=sys.stderr)
             return 2
 
-    client = client or GitHubClient()
-    verify_actor(client, inventory["owner"])
     desired_by_repo = [desired_state(policy, inventory, item) for item in selected]
     results = [audit_repository(client, desired) for desired in desired_by_repo]
 

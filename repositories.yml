@@ -1,11 +1,16 @@
 owner: jimc1682000
 
+discovery:
+  enabled: true
+  profile: baseline
+
 repositories:
   - repo: fhr
     manage: true
     apply: true
     profile: python
     default_branch: main
+    classification: active
     notes: "第一個中央管理 repository；已 apply"
 
   - repo: jimc1682000.github.io
@@ -13,7 +18,106 @@ repositories:
     apply: true
     profile: astro
     default_branch: master
+    classification: active
     overrides:
       repository_settings:
         allow_auto_merge: true
     notes: "Astro／Node.js；保留 content-only auto-merge；已核准 apply"
+
+  - repo: film-brain
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: master
+    classification: active
+
+  - repo: resume
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: dotfiles
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: my-kb
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: my-tf
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: devops-ai-toolkit
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: cdn-traffic-report
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: hackathon-ai-film-library
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: akamai-reports
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: s3-scripts
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: master
+    classification: active
+
+  - repo: copier-base
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: copier-fullstack
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: copier-tool
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: main
+    classification: active
+
+  - repo: my-nb
+    manage: true
+    apply: true
+    profile: baseline
+    default_branch: master
+    classification: active

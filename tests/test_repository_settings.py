@@ -3,10 +3,14 @@ import json
 import pytest
 
 from scripts.repository_settings import (
+    GitHubError,
     apply_repository,
+    audit_repository,
+    discover_repositories,
     desired_state,
     main,
     render_report,
+    resolve_inventory,
     select_like,
     validate_apply_scope,
     validate_configuration,
@@ -74,6 +78,165 @@ def test_validate_configuration_rejects_unknown_profile():
         validate_configuration(POLICY, inventory)
 
 
+def test_validate_configuration_rejects_unknown_profile_in_partial_override():
+    inventory = {
+        **INVENTORY,
+        "discovery": {"enabled": True, "profile": "python"},
+        "repositories": [{"repo": "app", "profile": "node"}],
+    }
+
+    with pytest.raises(ValueError, match="unknown profile for app: node"):
+        validate_configuration(POLICY, inventory)
+
+
+def test_validate_configuration_rejects_unknown_discovery_profile():
+    inventory = {**INVENTORY, "discovery": {"enabled": True, "profile": "node"}}
+
+    with pytest.raises(ValueError, match="unknown discovery profile"):
+        validate_configuration(POLICY, inventory)
+
+
+def test_discover_repositories_paginates_and_classifies_repositories():
+    class Client:
+        def request(self, method, path):
+            assert method == "GET"
+            if path.endswith("&page=1"):
+                return [
+                    {
+                        "name": f"repo-{index}",
+                        "owner": {"login": "example"},
+                        "default_branch": "main",
+                        "archived": False,
+                        "fork": False,
+                        "pushed_at": "2026-08-03T00:00:00Z",
+                    }
+                    for index in range(100)
+                ]
+            if path.endswith("&page=2"):
+                return [
+                    {
+                        "name": "archive",
+                        "owner": {"login": "example"},
+                        "default_branch": "main",
+                        "archived": True,
+                        "fork": False,
+                        "pushed_at": "2026-08-03T00:00:00Z",
+                    },
+                    {
+                        "name": "foreign",
+                        "owner": {"login": "someone-else"},
+                        "default_branch": "main",
+                        "archived": False,
+                        "fork": False,
+                        "pushed_at": "2026-08-03T00:00:00Z",
+                    },
+                ]
+            raise AssertionError(f"unexpected request: {path}")
+
+    repositories = discover_repositories(
+        Client(),
+        {
+            "owner": "example",
+            "discovery": {"enabled": True, "profile": "baseline"},
+        },
+    )
+
+    assert len(repositories) == 101
+    assert repositories[-1]["repo"] == "archive"
+    assert repositories[-1]["classification"] == "archived"
+    assert repositories[-1]["apply"] is False
+
+
+def test_discover_repositories_detects_empty_repo_with_default_branch_name():
+    class Client:
+        def request(self, method, path):
+            return [
+                {
+                    "name": "empty-app",
+                    "owner": {"login": "example"},
+                    "default_branch": "main",
+                    "archived": False,
+                    "fork": False,
+                    "pushed_at": None,
+                }
+            ]
+
+    repositories = discover_repositories(
+        Client(),
+        {
+            "owner": "example",
+            "discovery": {"enabled": True, "profile": "python"},
+        },
+    )
+
+    assert repositories[0]["classification"] == "empty"
+
+
+def test_audit_empty_repository_does_not_request_check_runs():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            raise AssertionError(f"unexpected request: {path}")
+
+    item = {**INVENTORY["repositories"][0], "classification": "empty"}
+    desired = desired_state(POLICY, INVENTORY, item)
+    result = audit_repository(Client(), desired)
+
+    assert result["blockers"] == [
+        "required checks cannot be observed: repository has no commits"
+    ]
+
+
+def test_resolve_inventory_applies_explicit_override_to_discovered_repository(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "scripts.repository_settings.discover_repositories",
+        lambda client, inventory: [
+            {
+                "repo": "app",
+                "manage": True,
+                "apply": False,
+                "profile": "baseline",
+                "default_branch": "main",
+                "classification": "audit-only",
+            }
+        ],
+    )
+    inventory = {
+        "owner": "example",
+        "discovery": {"enabled": True, "profile": "baseline"},
+        "repositories": [
+            {
+                "repo": "app",
+                "apply": True,
+                "profile": "python",
+                "classification": "active",
+            }
+        ],
+    }
+
+    repositories = resolve_inventory(object(), inventory)
+
+    assert repositories == [
+        {
+            "repo": "app",
+            "manage": True,
+            "apply": True,
+            "profile": "python",
+            "default_branch": "main",
+            "classification": "active",
+        }
+    ]
+
+
 def test_validate_apply_scope_rejects_audit_only_repository():
     with pytest.raises(ValueError, match="apply is disabled.*docs"):
         validate_apply_scope(
@@ -118,6 +281,114 @@ def test_apply_refuses_when_audit_has_blockers():
         )
 
 
+def test_audit_marks_plan_limited_ruleset_unavailable():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                raise GitHubError(
+                    "GET /repos/example/app/rulesets: Upgrade to GitHub Pro or make "
+                    "this repository public to enable this feature. (HTTP 403)"
+                )
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
+    result = audit_repository(Client(), desired)
+
+    assert result["changes"] == []
+    assert result["unavailable"] == [
+        {
+            "area": "ruleset",
+            "key": "baseline",
+            "reason": "GitHub plan limitation",
+        }
+    ]
+
+
+def test_audit_does_not_hide_unrelated_ruleset_403():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            raise GitHubError("GET rulesets: Resource not accessible (HTTP 403)")
+
+    desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
+
+    with pytest.raises(GitHubError, match="Resource not accessible"):
+        audit_repository(Client(), desired)
+
+
+def test_audit_preserves_missing_security_feature_as_unavailable():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
+    result = audit_repository(Client(), desired)
+
+    assert not any(change["area"] == "security" for change in result["changes"])
+    assert result["unavailable"] == [
+        {
+            "area": "security",
+            "key": "secret_scanning",
+            "reason": "not returned by repository API",
+        }
+    ]
+
+
+def test_apply_only_sends_security_features_observed_as_drift():
+    class Client:
+        def __init__(self):
+            self.payload = None
+
+        def request(self, method, path, payload=None):
+            assert (method, path) == ("PATCH", "/repos/example/app")
+            self.payload = payload
+
+    client = Client()
+    desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
+    audit = {
+        "repository": "example/app",
+        "blockers": [],
+        "changes": [
+            {
+                "area": "security",
+                "key": "secret_scanning",
+                "from": "disabled",
+                "to": "enabled",
+            }
+        ],
+        "ruleset_id": None,
+    }
+
+    apply_repository(client, desired, audit)
+
+    assert client.payload["security_and_analysis"] == {
+        "secret_scanning": {"status": "enabled"}
+    }
+
+
 def test_verify_actor_rejects_a_different_authenticated_user():
     class Client:
         def request(self, method, path):
@@ -145,6 +416,29 @@ def test_render_report_makes_report_only_and_drift_visible():
     assert "Mode: report-only" in report
     assert "DRIFT repository.x" in report
     assert "Planned changes: 1" in report
+
+
+def test_render_report_does_not_mark_unavailable_audit_compliant():
+    report = render_report(
+        [
+            {
+                "repository": "example/private-app",
+                "profile": "baseline",
+                "blockers": [],
+                "changes": [],
+                "unavailable": [
+                    {
+                        "area": "ruleset",
+                        "key": "baseline",
+                        "reason": "GitHub plan limitation",
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert "UNAVAILABLE ruleset.baseline" in report
+    assert "PASS compliant" not in report
 
 
 def test_report_only_finds_required_check_on_later_page(tmp_path, capsys):

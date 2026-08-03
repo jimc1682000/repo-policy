@@ -34,6 +34,8 @@ baseline:
           required_review_thread_resolution: true
 
 profiles:
+  baseline:
+    required_status_checks: []
   python:
     required_status_checks:
       - test
