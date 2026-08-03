@@ -119,7 +119,7 @@ def discover_repositories(
                         else "fork"
                         if repo.get("fork")
                         else "empty"
-                        if not repo.get("default_branch")
+                        if repo.get("pushed_at") is None
                         else "audit-only"
                     ),
                 }
@@ -359,13 +359,19 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
                 for check in rule["parameters"]["required_status_checks"]
             )
     if required_checks:
-        check_runs = list_check_runs(client, owner, repo, desired["default_branch"])
-        observed = {check["name"] for check in check_runs}
-        missing = sorted(set(required_checks) - observed)
-        if missing:
+        if desired["classification"] == "empty":
             blockers.append(
-                f"required checks not observed on default branch: {', '.join(missing)}"
+                "required checks cannot be observed: repository has no commits"
             )
+        else:
+            check_runs = list_check_runs(client, owner, repo, desired["default_branch"])
+            observed = {check["name"] for check in check_runs}
+            missing = sorted(set(required_checks) - observed)
+            if missing:
+                blockers.append(
+                    "required checks not observed on default branch: "
+                    + ", ".join(missing)
+                )
 
     return {
         "repository": f"{owner}/{repo}",

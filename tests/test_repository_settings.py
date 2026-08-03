@@ -108,6 +108,7 @@ def test_discover_repositories_paginates_and_classifies_repositories():
                         "default_branch": "main",
                         "archived": False,
                         "fork": False,
+                        "pushed_at": "2026-08-03T00:00:00Z",
                     }
                     for index in range(100)
                 ]
@@ -119,6 +120,7 @@ def test_discover_repositories_paginates_and_classifies_repositories():
                         "default_branch": "main",
                         "archived": True,
                         "fork": False,
+                        "pushed_at": "2026-08-03T00:00:00Z",
                     },
                     {
                         "name": "foreign",
@@ -126,6 +128,7 @@ def test_discover_repositories_paginates_and_classifies_repositories():
                         "default_branch": "main",
                         "archived": False,
                         "fork": False,
+                        "pushed_at": "2026-08-03T00:00:00Z",
                     },
                 ]
             raise AssertionError(f"unexpected request: {path}")
@@ -142,6 +145,53 @@ def test_discover_repositories_paginates_and_classifies_repositories():
     assert repositories[-1]["repo"] == "archive"
     assert repositories[-1]["classification"] == "archived"
     assert repositories[-1]["apply"] is False
+
+
+def test_discover_repositories_detects_empty_repo_with_default_branch_name():
+    class Client:
+        def request(self, method, path):
+            return [
+                {
+                    "name": "empty-app",
+                    "owner": {"login": "example"},
+                    "default_branch": "main",
+                    "archived": False,
+                    "fork": False,
+                    "pushed_at": None,
+                }
+            ]
+
+    repositories = discover_repositories(
+        Client(),
+        {
+            "owner": "example",
+            "discovery": {"enabled": True, "profile": "python"},
+        },
+    )
+
+    assert repositories[0]["classification"] == "empty"
+
+
+def test_audit_empty_repository_does_not_request_check_runs():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            raise AssertionError(f"unexpected request: {path}")
+
+    item = {**INVENTORY["repositories"][0], "classification": "empty"}
+    desired = desired_state(POLICY, INVENTORY, item)
+    result = audit_repository(Client(), desired)
+
+    assert result["blockers"] == [
+        "required checks cannot be observed: repository has no commits"
+    ]
 
 
 def test_resolve_inventory_applies_explicit_override_to_discovered_repository(
