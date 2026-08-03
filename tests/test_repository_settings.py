@@ -8,6 +8,7 @@ from scripts.repository_settings import (
     audit_repository,
     discover_repositories,
     desired_state,
+    failure_results,
     main,
     render_report,
     resolve_inventory,
@@ -485,3 +486,225 @@ def test_report_only_finds_required_check_on_later_page(tmp_path, capsys):
 
     assert result == 0
     assert "BLOCKED" not in capsys.readouterr().out
+
+
+def test_failure_results_can_limit_exit_code_to_active_repositories():
+    results = [
+        {
+            "repository": "example/app",
+            "classification": "active",
+            "blockers": ["missing check"],
+            "changes": [],
+        },
+        {
+            "repository": "example/lab",
+            "classification": "audit-only",
+            "blockers": ["default branch mismatch"],
+            "changes": [{"area": "repository", "key": "x", "from": 1, "to": 2}],
+        },
+    ]
+
+    assert failure_results(results, active_only=True) == [results[0]]
+    assert failure_results(results, active_only=False) == results
+
+
+def test_fail_on_active_ignores_audit_only_blockers_and_drift(tmp_path, capsys):
+    policy_path = tmp_path / "policy.yml"
+    inventory_path = tmp_path / "repositories.yml"
+    policy = {
+        "version": 1,
+        "baseline": {
+            "repository_settings": {"allow_squash_merge": True},
+            "security_and_analysis": {"secret_scanning": "enabled"},
+            "ruleset": {"name": "baseline", "rules": [{"type": "deletion"}]},
+        },
+        "profiles": {
+            "baseline": {"required_status_checks": []},
+            "python": {"required_status_checks": ["test"]},
+        },
+    }
+    inventory = {
+        "owner": "example",
+        "discovery": {"enabled": False},
+        "repositories": [
+            {
+                "repo": "app",
+                "manage": True,
+                "apply": True,
+                "profile": "python",
+                "default_branch": "main",
+                "classification": "active",
+            },
+            {
+                "repo": "lab",
+                "manage": True,
+                "apply": False,
+                "profile": "baseline",
+                "default_branch": "main",
+                "classification": "audit-only",
+            },
+        ],
+    }
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+    class Client:
+        def request(self, method, path, payload=None):
+            assert method == "GET"
+            if path == "/user":
+                return {"login": "example"}
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/lab":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": False,
+                    "security_and_analysis": {
+                        "secret_scanning": {"status": "disabled"}
+                    },
+                }
+            if path == "/repos/example/app/rulesets":
+                return [
+                    {
+                        "id": 1,
+                        "name": "baseline",
+                        "source_type": "Repository",
+                    }
+                ]
+            if path == "/repos/example/lab/rulesets":
+                return []
+            if path == "/repos/example/app/rulesets/1":
+                return {
+                    "id": 1,
+                    "name": "baseline",
+                    "source_type": "Repository",
+                    "rules": [
+                        {"type": "deletion"},
+                        {
+                            "type": "required_status_checks",
+                            "parameters": {
+                                "do_not_enforce_on_create": True,
+                                "required_status_checks": [{"context": "test"}],
+                                "strict_required_status_checks_policy": True,
+                            },
+                        },
+                    ],
+                }
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    result = main(
+        [
+            "--policy",
+            str(policy_path),
+            "--inventory",
+            str(inventory_path),
+            "--fail-on-active",
+            "--fail-on-drift",
+        ],
+        client=Client(),
+    )
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert "example/lab" in output
+    assert "DRIFT" in output
+
+
+def test_fail_on_active_still_fails_when_active_has_drift(tmp_path, capsys):
+    policy_path = tmp_path / "policy.yml"
+    inventory_path = tmp_path / "repositories.yml"
+    inventory = {
+        **INVENTORY,
+        "repositories": [
+            {
+                **INVENTORY["repositories"][0],
+                "classification": "active",
+            }
+        ],
+    }
+    policy_path.write_text(json.dumps(POLICY), encoding="utf-8")
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/user":
+                return {"login": "example"}
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": False,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    result = main(
+        [
+            "--policy",
+            str(policy_path),
+            "--inventory",
+            str(inventory_path),
+            "--fail-on-active",
+            "--fail-on-drift",
+        ],
+        client=Client(),
+    )
+
+    assert result == 1
+    assert "DRIFT" in capsys.readouterr().out
+
+
+def test_output_paths_write_json_and_text_reports(tmp_path, capsys):
+    policy_path = tmp_path / "policy.yml"
+    inventory_path = tmp_path / "repositories.yml"
+    output_json = tmp_path / "out" / "audit.json"
+    output_text = tmp_path / "out" / "audit.md"
+    policy_path.write_text(json.dumps(POLICY), encoding="utf-8")
+    inventory_path.write_text(json.dumps(INVENTORY), encoding="utf-8")
+
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/user":
+                return {"login": "example"}
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": True,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    result = main(
+        [
+            "--policy",
+            str(policy_path),
+            "--inventory",
+            str(inventory_path),
+            "--output-json",
+            str(output_json),
+            "--output-text",
+            str(output_text),
+        ],
+        client=Client(),
+    )
+
+    assert result == 0
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    text = output_text.read_text(encoding="utf-8")
+    assert payload["mode"] == "report-only"
+    assert payload["results"][0]["repository"] == "example/app"
+    assert "Mode: report-only" in text
+    assert "Mode: report-only" in capsys.readouterr().out
