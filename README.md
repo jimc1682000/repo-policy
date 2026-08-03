@@ -23,6 +23,7 @@
 | `policies/repository-settings.yml` | 共用 security / merge baseline 與技術棧 profiles |
 | `repositories.yml` | 中央管理 inventory；自動探索 owner 的全部 repositories |
 | `scripts/repository_settings.py` | 預設 report-only 的 GitHub settings reconciler |
+| `.github/workflows/repository-settings-audit.yml` | 每週中央 audit（active 有 drift／blocker 才失敗） |
 | `docs/personal-account-control-plane.md` | report / apply / 新增 repository 操作手冊 |
 
 ## 個人帳號中央管理
@@ -38,11 +39,19 @@ python scripts/repository_settings.py \
   --repo fhr \
   --apply \
   --confirm-owner jimc1682000
+
+# 排程／CI：只對 active 失敗，並輸出 artifact 用的報告檔
+python scripts/repository_settings.py \
+  --fail-on-active \
+  --fail-on-drift \
+  --output-json reports/repository-settings-audit.json \
+  --output-text reports/repository-settings-audit.md
 ```
 
 Inventory 會自動探索 `jimc1682000` 擁有的全部 repositories；新 repository 預設
 `audit-only`，只有明確 override 為 `apply: true` 者可寫入。同步程式不管理刪除、
-visibility、collaborator 或 secret，且 apply 前會確認 required checks 已在 default branch 出現。完整流程見
+visibility、collaborator 或 secret，且 apply 前會確認 required checks 已在 default
+branch 出現。每週 audit 需 secret `REPO_POLICY_AUDIT_TOKEN`；完整流程見
 [`docs/personal-account-control-plane.md`](docs/personal-account-control-plane.md)。
 
 ## 風險原則

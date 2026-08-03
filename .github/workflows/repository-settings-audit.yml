@@ -1,0 +1,85 @@
+# Weekly central audit of personal-account repository settings.
+#
+# - Discovers every repository owned by the inventory owner (public + private).
+# - Fails only when classification=active has drift or blockers.
+# - audit-only / fork / archived / empty stay report-only so the workflow stays green.
+# - Requires REPO_POLICY_AUDIT_TOKEN (user-scoped read PAT); github.token is
+#   repository-scoped and cannot list or audit the full account.
+
+name: Repository settings audit
+
+on:
+  schedule:
+    # Monday 03:17 UTC — offset from the hour to reduce shared-runner contention.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.REPO_POLICY_AUDIT_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.REPO_POLICY_AUDIT_TOKEN }}
+    steps:
+      - name: Require audit token
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "REPO_POLICY_AUDIT_TOKEN is not configured." >&2
+            echo "Create a fine-grained PAT (All repositories, read-only) and store it" >&2
+            echo "as repository secret REPO_POLICY_AUDIT_TOKEN. See" >&2
+            echo "docs/personal-account-control-plane.md." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install --quiet pyyaml
+
+      - name: Run central settings audit
+        id: audit
+        run: |
+          mkdir -p reports
+          set +e
+          PYTHONPATH=. python scripts/repository_settings.py \
+            --fail-on-active \
+            --fail-on-drift \
+            --output-json reports/repository-settings-audit.json \
+            --output-text reports/repository-settings-audit.md \
+            | tee reports/repository-settings-audit-console.txt
+          code=$?
+          set -e
+          echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Repository settings audit"
+            echo
+            echo "Exit code: \`${code}\` (non-zero only when active repos have drift/blockers)"
+            echo
+            echo '```'
+            # Keep the job summary readable; full report is in the artifact.
+            head -n 200 reports/repository-settings-audit.md
+            if [ "$(wc -l < reports/repository-settings-audit.md)" -gt 200 ]; then
+              echo "... (truncated; see artifact)"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${code}"
+
+      - name: Upload audit reports
+        if: always() && hashFiles('reports/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-settings-audit
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 90

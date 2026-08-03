@@ -448,6 +448,15 @@ def render_report(results: list[dict[str, Any]], applied: bool = False) -> str:
     return "\n".join(lines)
 
 
+def failure_results(
+    results: list[dict[str, Any]], *, active_only: bool
+) -> list[dict[str, Any]]:
+    """Return results that should influence the process exit code."""
+    if not active_only:
+        return results
+    return [result for result in results if result.get("classification") == "active"]
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -459,7 +468,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--json", action="store_true", help="Print machine-readable report"
     )
     parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="Write machine-readable report to this path",
+    )
+    parser.add_argument(
+        "--output-text",
+        type=Path,
+        help="Write human-readable report to this path",
+    )
+    parser.add_argument(
         "--fail-on-drift", action="store_true", help="Exit non-zero on drift"
+    )
+    parser.add_argument(
+        "--fail-on-active",
+        action="store_true",
+        help=(
+            "Only let active repositories influence exit code "
+            "(audit-only / fork / archived stay report-only)"
+        ),
     )
     parser.add_argument("--apply", action="store_true", help="Apply approved changes")
     parser.add_argument(
@@ -512,18 +539,30 @@ def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> i
             apply_repository(client, desired, result)
         results = [audit_repository(client, desired) for desired in desired_by_repo]
 
+    report_payload = {
+        "mode": "apply" if args.apply else "report-only",
+        "results": results,
+    }
+    report_text = render_report(results, applied=args.apply)
+
     if args.json:
-        print(
-            json.dumps(
-                {"mode": "apply" if args.apply else "report-only", "results": results},
-                indent=2,
-            )
-        )
+        print(json.dumps(report_payload, indent=2))
     else:
-        print(render_report(results, applied=args.apply))
-    if any(result["blockers"] for result in results):
+        print(report_text)
+
+    if args.output_json is not None:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(
+            json.dumps(report_payload, indent=2) + "\n", encoding="utf-8"
+        )
+    if args.output_text is not None:
+        args.output_text.parent.mkdir(parents=True, exist_ok=True)
+        args.output_text.write_text(report_text + "\n", encoding="utf-8")
+
+    candidates = failure_results(results, active_only=args.fail_on_active)
+    if any(result["blockers"] for result in candidates):
         return 1
-    if args.fail_on_drift and any(result["changes"] for result in results):
+    if args.fail_on_drift and any(result["changes"] for result in candidates):
         return 1
     return 0
 

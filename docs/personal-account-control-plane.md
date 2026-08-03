@@ -44,8 +44,45 @@ python scripts/repository_settings.py --repo fhr
 python scripts/repository_settings.py --repo fhr --json
 ```
 
-排程稽核可加 `--fail-on-drift`，讓 drift 或 blocker 以非零 exit code 呈現；一般人工
-report 不加此參數，因此發現 drift 不會被誤判成執行失敗。
+排程稽核可加 `--fail-on-drift`，讓 drift 以非零 exit code 呈現；一般人工
+report 不加此參數，因此發現 drift 不會被誤判成執行失敗。預設任何 repository 的
+blocker 都會讓 exit code 非零。
+
+週期性中央 audit（GitHub Actions）請再加 `--fail-on-active`，只讓
+`classification: active` 的 drift／blocker 讓 workflow 失敗；audit-only、fork、
+archived、empty 仍寫進報告，但不會讓排程長期紅燈。
+
+```bash
+python scripts/repository_settings.py \
+  --fail-on-active \
+  --fail-on-drift \
+  --output-json reports/repository-settings-audit.json \
+  --output-text reports/repository-settings-audit.md
+```
+
+## 每週自動 audit
+
+Workflow：`.github/workflows/repository-settings-audit.yml`
+
+- 觸發：每週一 03:17 UTC（`schedule`）與 `workflow_dispatch`
+- 行為：discovery 全量 audit；active 有 drift／blocker 時 job 失敗；JSON／Markdown
+  report 上傳為 artifact（保留 90 天）
+- 必要 secret：`REPO_POLICY_AUDIT_TOKEN`
+
+`github.token` 只綁定目前 repository，無法列出或稽核帳號下其他 private
+repositories，因此必須使用 **user-scoped read PAT**：
+
+1. 建立 fine-grained PAT，Resource owner = `jimc1682000`
+2. Repository access = **All repositories**（含未來新建）
+3. Permissions（read-only）：
+   - Metadata: Read
+   - Administration: Read（rulesets / merge settings 讀取）
+   - Contents: Read
+   - Checks: Read
+4. 寫入 repo secret 名稱：`REPO_POLICY_AUDIT_TOKEN`（勿印出 token）
+5. 在 Actions 手動跑一次 **Repository settings audit** 確認綠燈
+
+此 token 只用於 report-only；workflow **不會**帶 `--apply`。
 
 ## Apply
 
