@@ -105,7 +105,16 @@ def desired_state(
     baseline["repo"] = item["repo"]
     baseline["default_branch"] = item["default_branch"]
     baseline["profile"] = item["profile"]
+    baseline["apply_enabled"] = item.get("apply", False)
     return baseline
+
+
+def validate_apply_scope(items: list[dict[str, Any]]) -> None:
+    audit_only = [item["repo"] for item in items if not item.get("apply", False)]
+    if audit_only:
+        raise ValueError(
+            "apply is disabled in inventory for: " + ", ".join(sorted(audit_only))
+        )
 
 
 def select_like(current: Any, desired: Any) -> Any:
@@ -165,6 +174,23 @@ def verify_actor(client: GitHubClient, expected_owner: str) -> None:
         )
 
 
+def list_check_runs(
+    client: GitHubClient, owner: str, repo: str, ref: str
+) -> list[dict[str, Any]]:
+    check_runs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        response = client.request(
+            "GET",
+            f"/repos/{owner}/{repo}/commits/{ref}/check-runs?per_page=100&page={page}",
+        )
+        batch = response.get("check_runs", [])
+        check_runs.extend(batch)
+        if len(batch) < 100 or len(check_runs) >= response.get("total_count", 0):
+            return check_runs
+        page += 1
+
+
 def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str, Any]:
     owner = desired["owner"]
     repo = desired["repo"]
@@ -222,11 +248,8 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
                 for check in rule["parameters"]["required_status_checks"]
             )
     if required_checks:
-        check_runs = client.request(
-            "GET",
-            f"/repos/{owner}/{repo}/commits/{desired['default_branch']}/check-runs",
-        )
-        observed = {check["name"] for check in check_runs.get("check_runs", [])}
+        check_runs = list_check_runs(client, owner, repo, desired["default_branch"])
+        observed = {check["name"] for check in check_runs}
         missing = sorted(set(required_checks) - observed)
         if missing:
             blockers.append(
@@ -236,6 +259,7 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
     return {
         "repository": f"{owner}/{repo}",
         "profile": desired["profile"],
+        "apply_enabled": desired["apply_enabled"],
         "changes": changes,
         "blockers": blockers,
         "ruleset_id": live_ruleset.get("id") if live_ruleset else None,
@@ -275,6 +299,9 @@ def render_report(results: list[dict[str, Any]], applied: bool = False) -> str:
     for result in results:
         lines.append(f"\nRepository: {result['repository']}")
         lines.append(f"Profile: {result['profile']}")
+        lines.append(
+            f"Apply: {'enabled' if result.get('apply_enabled', False) else 'disabled'}"
+        )
         for blocker in result["blockers"]:
             lines.append(f"BLOCKED {blocker}")
         for change in result["changes"]:
@@ -329,6 +356,12 @@ def main(argv: list[str] | None = None, client: GitHubClient | None = None) -> i
     if args.repo and not selected:
         print(f"managed repository not found: {args.repo}", file=sys.stderr)
         return 2
+    if args.apply:
+        try:
+            validate_apply_scope(selected)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
 
     client = client or GitHubClient()
     verify_actor(client, inventory["owner"])
