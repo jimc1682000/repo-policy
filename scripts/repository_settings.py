@@ -174,6 +174,23 @@ def verify_actor(client: GitHubClient, expected_owner: str) -> None:
         )
 
 
+def list_check_runs(
+    client: GitHubClient, owner: str, repo: str, ref: str
+) -> list[dict[str, Any]]:
+    check_runs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        response = client.request(
+            "GET",
+            f"/repos/{owner}/{repo}/commits/{ref}/check-runs?per_page=100&page={page}",
+        )
+        batch = response.get("check_runs", [])
+        check_runs.extend(batch)
+        if len(batch) < 100 or len(check_runs) >= response.get("total_count", 0):
+            return check_runs
+        page += 1
+
+
 def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str, Any]:
     owner = desired["owner"]
     repo = desired["repo"]
@@ -231,11 +248,8 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
                 for check in rule["parameters"]["required_status_checks"]
             )
     if required_checks:
-        check_runs = client.request(
-            "GET",
-            f"/repos/{owner}/{repo}/commits/{desired['default_branch']}/check-runs",
-        )
-        observed = {check["name"] for check in check_runs.get("check_runs", [])}
+        check_runs = list_check_runs(client, owner, repo, desired["default_branch"])
+        observed = {check["name"] for check in check_runs}
         missing = sorted(set(required_checks) - observed)
         if missing:
             blockers.append(
