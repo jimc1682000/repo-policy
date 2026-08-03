@@ -21,7 +21,7 @@
 | `scripts/scaffold_consumer.sh` | 產生 thin wrapper 範本 |
 | `scripts/list_consumers.sh` | 列出 adopt / wrapper 狀態 |
 | `policies/repository-settings.yml` | 共用 security / merge baseline 與技術棧 profiles |
-| `repositories.yml` | 中央管理 inventory；初期只納管 FHR |
+| `repositories.yml` | 中央管理 inventory；自動探索 owner 的全部 repositories |
 | `scripts/repository_settings.py` | 預設 report-only 的 GitHub settings reconciler |
 | `docs/personal-account-control-plane.md` | report / apply / 新增 repository 操作手冊 |
 
@@ -40,8 +40,9 @@ python scripts/repository_settings.py \
   --confirm-owner jimc1682000
 ```
 
-目前 inventory 只啟用 FHR pilot。同步程式不管理刪除、visibility、collaborator 或
-secret，且 apply 前會確認 required checks 已在 default branch 出現。完整流程見
+Inventory 會自動探索 `jimc1682000` 擁有的全部 repositories；新 repository 預設
+`audit-only`，只有明確 override 為 `apply: true` 者可寫入。同步程式不管理刪除、
+visibility、collaborator 或 secret，且 apply 前會確認 required checks 已在 default branch 出現。完整流程見
 [`docs/personal-account-control-plane.md`](docs/personal-account-control-plane.md)。
 
 ## 風險原則

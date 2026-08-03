@@ -1,7 +1,7 @@
 # 個人帳號 Repository 中央管理
 
 GitHub 個人帳號沒有 Organization security configuration 的繼承能力。本控制面以
-desired-state reconciliation 管理已登錄 repository：預設只產生差異報告，只有明確
+desired-state reconciliation 管理 owner 擁有的全部 repositories：預設只產生差異報告，只有明確
 指定 `--apply` 與 owner 確認值時才會寫入。
 
 同步程式固定使用 GitHub REST API `2026-03-10`，避免 API 預設版本改變造成未預期
@@ -18,6 +18,16 @@ payload 行為。
 既有 ruleset；只建立或更新名稱為 `repo-policy-baseline` 的 ruleset。
 
 ## Report-only
+
+`repositories.yml` 的 `discovery.enabled: true` 會透過 authenticated `/user/repos`
+完整分頁探索 owner 的 public／private repositories。未明確列出的 repository 會套用
+`baseline` profile、分類為 `audit-only` 並固定 `apply: false`；fork、archived 與沒有
+default branch 的 repository 仍列入報告，但分別標示其分類。
+
+GitHub Free 不提供 private repository rulesets 時，報告會標示
+`UNAVAILABLE ruleset.repo-policy-baseline: GitHub plan limitation`，不把它誤判成
+disabled 或 drift，也不嘗試 apply。Repository API 未回傳的 security feature 同樣
+標成 `UNAVAILABLE`；其他 `403` 仍視為授權錯誤並立即停止。
 
 先確認 `gh auth status` 的 active account 是 repository owner，再執行：
 
@@ -53,10 +63,13 @@ python scripts/repository_settings.py \
 設定 `apply: true` 的 repository 可以寫入；任何 audit-only repository 都會讓整次 apply
 失敗，不會被靜默略過。
 
+批次 rollout 以 `consumers.yml` 既有的人工 active 清單為準。Fork、archived、backup、
+舊 Lab 與尚未人工評估的 repository 仍受中央 audit 覆蓋，但不開啟 apply。
+
 ## 新增 Repository
 
-1. 在 inventory 新增 repository，設 `manage: true`、`apply: false`。
-2. 選擇既有 profile，或在 policy 新增所需 required checks。
+1. 新 repository 會自動進入 inventory，無須手動登錄。
+2. 要啟用 apply 時才新增 explicit override，選擇 profile 並設 `classification: active`。
 3. 執行 report-only，解決所有 `BLOCKED` 並審閱 `DRIFT`。
 4. 取得 apply 核准後，才把 `apply` 改成 `true`。
 
