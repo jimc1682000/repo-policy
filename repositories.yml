@@ -10,10 +10,10 @@ repositories:
 
   - repo: jimc1682000.github.io
     manage: true
-    apply: false
+    apply: true
     profile: astro
     default_branch: master
     overrides:
       repository_settings:
         allow_auto_merge: true
-    notes: "Astro／Node.js pilot；保留 content-only auto-merge，目前只允許 report-only"
+    notes: "Astro／Node.js；保留 content-only auto-merge；已核准 apply"
