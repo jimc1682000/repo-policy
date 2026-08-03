@@ -430,7 +430,11 @@ def render_report(results: list[dict[str, Any]], applied: bool = False) -> str:
                 f"DRIFT {change['area']}.{change['key']}: "
                 f"{change['from']!r} -> {change['to']!r}"
             )
-        if not result["blockers"] and not result["changes"]:
+        if (
+            not result["blockers"]
+            and not result["changes"]
+            and not result.get("unavailable", [])
+        ):
             lines.append("PASS compliant")
         lines.append(f"Planned changes: {len(result['changes'])}")
     return "\n".join(lines)

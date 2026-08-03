@@ -357,6 +357,29 @@ def test_render_report_makes_report_only_and_drift_visible():
     assert "Planned changes: 1" in report
 
 
+def test_render_report_does_not_mark_unavailable_audit_compliant():
+    report = render_report(
+        [
+            {
+                "repository": "example/private-app",
+                "profile": "baseline",
+                "blockers": [],
+                "changes": [],
+                "unavailable": [
+                    {
+                        "area": "ruleset",
+                        "key": "baseline",
+                        "reason": "GitHub plan limitation",
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert "UNAVAILABLE ruleset.baseline" in report
+    assert "PASS compliant" not in report
+
+
 def test_report_only_finds_required_check_on_later_page(tmp_path, capsys):
     policy_path = tmp_path / "policy.yml"
     inventory_path = tmp_path / "repositories.yml"
