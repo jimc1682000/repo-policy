@@ -50,13 +50,14 @@ jobs:
         id: audit
         run: |
           mkdir -p reports
+          # Do not pipe through tee: default shell is bash -e without pipefail,
+          # so a successful tee would mask the Python audit exit code.
           set +e
           PYTHONPATH=. python scripts/repository_settings.py \
             --fail-on-active \
             --fail-on-drift \
             --output-json reports/repository-settings-audit.json \
-            --output-text reports/repository-settings-audit.md \
-            | tee reports/repository-settings-audit-console.txt
+            --output-text reports/repository-settings-audit.md
           code=$?
           set -e
           echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
