@@ -305,15 +305,49 @@ def parse_version_pairs(text: str) -> list[tuple[tuple[int, ...], tuple[int, ...
     ]
 
 
+# Dependabot/Renovate declare the semver level themselves, in the commit trailer
+# ("update-type: version-update:semver-minor") or the legacy body form
+# ("version-update:semver-minor"). That declaration is authoritative; the rendered
+# body is not.
+SEMVER_LEVEL_RE = re.compile(
+    r"(?:update-type:\s*)?version-update:semver-(major|minor|patch)", re.I
+)
+
+# Lines the bot writes about *this* PR's dependencies. Anything else in the body —
+# release notes, changelog excerpts, commit lists — describes upstream history and
+# must not be parsed for version pairs.
+DECLARED_UPDATE_LINE_RE = re.compile(
+    r"^\s*(?:updates?|bumps?)\s+[`\"']?[A-Za-z0-9_.@/-]+[`\"']?\s+from\s+.*$",
+    re.I | re.M,
+)
+
+
+def declared_semver_levels(pr: dict[str, Any]) -> set[str]:
+    """Semver levels the bot declared for this PR (authoritative, may be empty)."""
+    return {m.group(1).lower() for m in SEMVER_LEVEL_RE.finditer(dependency_update_text(pr))}
+
+
+def declared_version_pairs(pr: dict[str, Any]) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    """Version pairs from the bot's own update lines and the PR title only.
+
+    Scanning the whole body instead lets an upstream changelog entry such as
+    "bump eslint-plugin from 71.1.0 to 72.0.0" mark an unrelated patch/minor PR as a
+    major update, which permanently blocks grouped dependency PRs from automation.
+    """
+    text = dependency_update_text(pr)
+    scoped = "\n".join(DECLARED_UPDATE_LINE_RE.findall(text))
+    pairs = parse_version_pairs(scoped)
+    if not pairs:
+        pairs = parse_version_pairs(pr.get("title") or "")
+    return pairs
+
+
 def is_major_update(pr: dict[str, Any]) -> bool:
-    text = dependency_update_text(pr).lower()
-    if "version-update:semver-major" in text:
-        return True
-    if re.search(r"\b(major|semver-major)\b", text) and "group" in (pr.get("title") or "").lower():
-        # Ambiguous major wording alone is not enough without version pairs for groups —
-        # handled by is_unparseable_grouped_update fail-closed path.
-        pass
-    return any(before[0] != after[0] for before, after in parse_version_pairs(text))
+    levels = declared_semver_levels(pr)
+    if levels:
+        # The bot told us. Trust it and stop reading prose.
+        return "major" in levels
+    return any(before[0] != after[0] for before, after in declared_version_pairs(pr))
 
 
 def is_unparseable_grouped_update(pr: dict[str, Any]) -> bool:
@@ -322,7 +356,7 @@ def is_unparseable_grouped_update(pr: dict[str, Any]) -> bool:
     if not grouped:
         return False
     # Fail closed: grouped updates without parseable from→to pairs cannot be proven low-risk.
-    return not parse_version_pairs(dependency_update_text(pr))
+    return not declared_semver_levels(pr) and not declared_version_pairs(pr)
 
 
 def files(pr: dict[str, Any]) -> list[str]:
@@ -333,14 +367,26 @@ def changed_lines(pr: dict[str, Any]) -> int:
     return int(pr.get("additions") or 0) + int(pr.get("deletions") or 0)
 
 
+def match_path(path: str, pattern: str) -> bool:
+    """fnmatch, plus the usual glob reading of a leading "**/" as *zero* or more dirs.
+
+    Plain fnmatch requires a separator, so "**/package-lock.json" misses the lockfile at
+    the repository root — which is exactly where npm and uv put theirs, so every such PR
+    fell out of the low-risk allowlist.
+    """
+    if fnmatch(path, pattern):
+        return True
+    return pattern.startswith("**/") and fnmatch(path, pattern[3:])
+
+
 def all_files_match(paths: list[str], patterns: tuple[str, ...]) -> bool:
     return bool(paths) and all(
-        any(fnmatch(path, pattern) for pattern in patterns) for path in paths
+        any(match_path(path, pattern) for pattern in patterns) for path in paths
     )
 
 
 def any_file_matches(paths: list[str], patterns: tuple[str, ...]) -> bool:
-    return any(any(fnmatch(path, pattern) for pattern in patterns) for path in paths)
+    return any(any(match_path(path, pattern) for pattern in patterns) for path in paths)
 
 
 def has_green_checks(pr: dict[str, Any], policy: Policy) -> tuple[bool, str]:
@@ -546,7 +592,7 @@ def classify_dependabot(pr: dict[str, Any], pr_files: list[str], policy: Policy)
             if "lock" in p.lower() or p.endswith(".sum")
         ),
     )
-    if not names and not lockfile_only and not parse_version_pairs(dependency_update_text(pr)):
+    if not names and not lockfile_only and not declared_version_pairs(pr):
         return Decision(
             "risk:manual-only",
             False,
