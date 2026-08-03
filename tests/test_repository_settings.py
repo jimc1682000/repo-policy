@@ -78,6 +78,17 @@ def test_validate_configuration_rejects_unknown_profile():
         validate_configuration(POLICY, inventory)
 
 
+def test_validate_configuration_rejects_unknown_profile_in_partial_override():
+    inventory = {
+        **INVENTORY,
+        "discovery": {"enabled": True, "profile": "python"},
+        "repositories": [{"repo": "app", "profile": "node"}],
+    }
+
+    with pytest.raises(ValueError, match="unknown profile for app: node"):
+        validate_configuration(POLICY, inventory)
+
+
 def test_validate_configuration_rejects_unknown_discovery_profile():
     inventory = {**INVENTORY, "discovery": {"enabled": True, "profile": "node"}}
 

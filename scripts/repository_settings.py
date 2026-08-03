@@ -78,7 +78,9 @@ def validate_configuration(policy: dict[str, Any], inventory: dict[str, Any]) ->
             raise ValueError(f"duplicate repository entry: {repo}")
         seen.add(repo)
         profile = item.get("profile")
-        if item.get("manage", False) and profile not in profiles:
+        if profile is not None and profile not in profiles:
+            raise ValueError(f"unknown profile for {repo}: {profile}")
+        if item.get("manage", False) and profile is None:
             raise ValueError(f"unknown profile for {repo}: {profile}")
 
     discovery = inventory.get("discovery", {})
