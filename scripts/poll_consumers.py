@@ -39,6 +39,10 @@ class OverrideFetchError(RuntimeError):
     """The override YAML could not be read, and it is not a confirmed 404."""
 
 
+class ConsumerUnreadable(RuntimeError):
+    """The consumer's open PRs could not be listed at all."""
+
+
 @dataclass(frozen=True)
 class Consumer:
     repo: str  # owner/name
@@ -88,24 +92,31 @@ def run_gh(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return result
 
 
-def open_pr_count(repo: str) -> int:
-    """0 when the repo has no open PRs, or when it cannot be read at all.
+def open_pr_numbers(repo: str) -> list[int]:
+    """Every open PR number, paginated.
 
-    An unreadable repo is reported by the caller rather than aborting the sweep:
-    one revoked grant should not stop the other consumers from being evaluated.
+    Raises instead of returning an empty list when the repo cannot be read: an
+    expired PAT or a revoked grant looks exactly like "no open PRs", and this
+    poller is now the only timer, so a silently skipped repo would stop being
+    re-evaluated forever with a green run to show for it.
+
+    Paginating here (rather than letting the pinned script call `gh pr list`,
+    which defaults to 30) is also what keeps repos with many open PRs swept.
     """
     result = run_gh(
         "api",
+        "--paginate",
         f"repos/{repo}/pulls?state=open&per_page=100",
         "--jq",
-        "length",
+        ".[].number",
         check=False,
     )
     if result.returncode != 0:
-        print(f"{repo}: cannot list PRs — {result.stderr.strip()}", file=sys.stderr)
-        return 0
-    text = result.stdout.strip()
-    return int(text) if text.isdigit() else 0
+        raise ConsumerUnreadable(
+            f"{repo}: cannot list PRs — "
+            f"{result.stderr.strip() or f'gh exit {result.returncode}'}"
+        )
+    return [int(line) for line in result.stdout.split() if line.strip().isdigit()]
 
 
 def fetch_override(consumer: Consumer, dest_dir: Path) -> Path | None:
@@ -138,8 +149,18 @@ def fetch_override(consumer: Consumer, dest_dir: Path) -> Path | None:
     return dest
 
 
-def evaluate(consumer: Consumer, policy_dir: Path, work_dir: Path, dry_run: bool) -> int:
-    override = fetch_override(consumer, work_dir)
+def evaluate(
+    consumer: Consumer,
+    policy_dir: Path,
+    override: Path | None,
+    dry_run: bool,
+    pr_number: int,
+) -> int:
+    """Evaluate one PR.
+
+    One PR per invocation, with PR_NUMBER pinned: the pinned script's own
+    listing goes through `gh pr list` without --limit, which stops at 30.
+    """
     env = os.environ | {
         "GITHUB_REPOSITORY": consumer.repo,
         "DEFAULT_BRANCH": consumer.default_branch,
@@ -147,8 +168,8 @@ def evaluate(consumer: Consumer, policy_dir: Path, work_dir: Path, dry_run: bool
         "AUTOMATION_COMMENT_AUTHORS": consumer.authors,
         "AUTOMATION_WORKFLOW_NAME": consumer.workflow_name,
         "DRY_RUN": "1" if dry_run else "",
+        "PR_NUMBER": str(pr_number),
     }
-    env.pop("PR_NUMBER", None)  # always sweep every open PR
     if override is None:
         env.pop("POLICY_OVERRIDE_PATH", None)
     else:
@@ -196,19 +217,30 @@ def main(argv: list[str] | None = None) -> int:
     evaluated: list[str] = []
     failed: list[str] = []
     for consumer in consumers:
-        count = open_pr_count(consumer.repo)
-        if count == 0:
-            continue
-        print(f"== {consumer.repo}: {count} open PR(s)")
-        evaluated.append(consumer.repo)
         try:
-            code = evaluate(consumer, args.policy_dir, args.work_dir, args.dry_run)
+            numbers = open_pr_numbers(consumer.repo)
+        except ConsumerUnreadable as exc:
+            print(str(exc), file=sys.stderr)
+            failed.append(f"{consumer.repo} (unreadable)")
+            continue
+        if not numbers:
+            continue
+
+        print(f"== {consumer.repo}: {len(numbers)} open PR(s)")
+        try:
+            override = fetch_override(consumer, args.work_dir)
         except OverrideFetchError as exc:
             print(str(exc), file=sys.stderr)
             failed.append(f"{consumer.repo} (override unreadable)")
             continue
-        if code != 0:
-            failed.append(f"{consumer.repo} (exit {code})")
+
+        evaluated.append(consumer.repo)
+        for number in numbers:
+            code = evaluate(
+                consumer, args.policy_dir, override, args.dry_run, number
+            )
+            if code != 0:
+                failed.append(f"{consumer.repo}#{number} (exit {code})")
 
     print(
         json.dumps(

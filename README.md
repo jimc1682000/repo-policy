@@ -106,8 +106,9 @@ on:
   workflow_run:
     workflows: ["CI"]    # 依 repo 實際 CI workflow 名稱
     types: [completed]
-  schedule:
-    - cron: "17,47 * * * *"
+  # 不要加 schedule:定時重評由本 repo 的 central poller 負責(public,不計費);
+  # private consumer 每次輪詢都收一整分鐘。真的需要自己的 cron 才用
+  # scaffold_consumer.sh --schedule 明確 opt-in。
   workflow_dispatch:
 
 permissions:
