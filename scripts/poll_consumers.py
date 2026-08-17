@@ -35,6 +35,10 @@ DEFAULT_WORKFLOW_NAME = "PR merge automation"
 GH_BIN = shutil.which("gh")
 
 
+class OverrideFetchError(RuntimeError):
+    """The override YAML could not be read, and it is not a confirmed 404."""
+
+
 @dataclass(frozen=True)
 class Consumer:
     repo: str  # owner/name
@@ -105,7 +109,13 @@ def open_pr_count(repo: str) -> int:
 
 
 def fetch_override(consumer: Consumer, dest_dir: Path) -> Path | None:
-    """Copy the consumer's override YAML out of its default branch, if any."""
+    """Copy the consumer's override YAML out of its default branch, if any.
+
+    Only a confirmed 404 means "this repo has no override".  Every other gh
+    failure — expired token, rate limit, bad ref — must not silently fall back
+    to the default policy: the override is what makes a consumer *more*
+    restrictive, so losing it could merge a PR the repo meant to hold.
+    """
     if not consumer.override_path:
         return None
     result = run_gh(
@@ -117,7 +127,12 @@ def fetch_override(consumer: Consumer, dest_dir: Path) -> Path | None:
         check=False,
     )
     if result.returncode != 0:
-        return None
+        if "HTTP 404" in result.stderr:
+            return None
+        raise OverrideFetchError(
+            f"{consumer.repo}: cannot read {consumer.override_path} — "
+            f"{result.stderr.strip() or f'gh exit {result.returncode}'}"
+        )
     dest = dest_dir / f"{consumer.repo.replace('/', '__')}-override.yml"
     dest.write_text(result.stdout, encoding="utf-8")
     return dest
@@ -185,8 +200,13 @@ def main(argv: list[str] | None = None) -> int:
         if count == 0:
             continue
         print(f"== {consumer.repo}: {count} open PR(s)")
-        code = evaluate(consumer, args.policy_dir, args.work_dir, args.dry_run)
         evaluated.append(consumer.repo)
+        try:
+            code = evaluate(consumer, args.policy_dir, args.work_dir, args.dry_run)
+        except OverrideFetchError as exc:
+            print(str(exc), file=sys.stderr)
+            failed.append(f"{consumer.repo} (override unreadable)")
+            continue
         if code != 0:
             failed.append(f"{consumer.repo} (exit {code})")
 

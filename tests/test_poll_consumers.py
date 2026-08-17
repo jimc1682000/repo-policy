@@ -11,6 +11,8 @@ from scripts.poll_consumers import (
     DEFAULT_AUTHORS,
     DEFAULT_OVERRIDE_PATH,
     Consumer,
+    OverrideFetchError,
+    fetch_override,
     open_pr_count,
     selected_consumers,
 )
@@ -76,6 +78,48 @@ def test_open_pr_count(monkeypatch, stdout, returncode, expected):
 
     monkeypatch.setattr(poll_consumers, "run_gh", fake_run_gh)
     assert open_pr_count("jimc1682000/my-nb") == expected
+
+
+def _fake_gh(returncode: int, stdout: str = "", stderr: str = ""):
+    def fake(*args, check=True):
+        return subprocess.CompletedProcess(args, returncode, stdout, stderr)
+
+    return fake
+
+
+CONSUMER = Consumer(
+    "jimc1682000/my-nb", "main", ".github/policies/pr-automerge.yml", "a", "w"
+)
+
+
+def test_missing_override_is_a_confirmed_404(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        poll_consumers, "run_gh", _fake_gh(1, stderr="gh: Not Found (HTTP 404)")
+    )
+    assert fetch_override(CONSUMER, tmp_path) is None
+
+
+def test_override_fetch_failure_is_not_treated_as_missing(monkeypatch, tmp_path):
+    # 401/rate limit must not silently downgrade to the default policy.
+    monkeypatch.setattr(
+        poll_consumers, "run_gh", _fake_gh(1, stderr="gh: Bad credentials (HTTP 401)")
+    )
+    with pytest.raises(OverrideFetchError):
+        fetch_override(CONSUMER, tmp_path)
+
+
+def test_override_is_written_when_present(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        poll_consumers, "run_gh", _fake_gh(0, stdout="trusted_comment_authors: [x]\n")
+    )
+    dest = fetch_override(CONSUMER, tmp_path)
+    assert dest is not None
+    assert dest.read_text(encoding="utf-8") == "trusted_comment_authors: [x]\n"
+
+
+def test_no_override_path_skips_the_fetch(tmp_path):
+    consumer = Consumer("jimc1682000/dotfiles", "main", "", "a", "w")
+    assert fetch_override(consumer, tmp_path) is None
 
 
 def test_consumer_is_hashable_and_frozen():
