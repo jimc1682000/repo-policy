@@ -1,0 +1,106 @@
+# Central re-evaluation of open PRs across every adopt:true consumer.
+#
+# Why this lives here: the "wait 30 minutes, then merge" rule needs a timer, and
+# a timer inside a private consumer costs one billed Actions minute per poll.
+# This repository is public, so the same timer is free. Consumers keep their
+# event triggers and workflow_dispatch; they no longer need a schedule.
+#
+# Security: schedule + workflow_dispatch only. Never add a PR-triggered event
+# here — REPO_POLICY_AUTOMERGE_TOKEN can write to every consumer repository.
+
+name: Central PR merge poller
+
+on:
+  schedule:
+    # Twice an hour, offset from the hour to reduce shared-runner contention.
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Optional single consumer (owner/name or bare name)
+        required: false
+        default: ""
+      dry_run:
+        description: Classify only; do not label/comment/merge
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.REPO_POLICY_AUTOMERGE_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.REPO_POLICY_AUTOMERGE_TOKEN }}
+    steps:
+      - name: Require automerge token
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "REPO_POLICY_AUTOMERGE_TOKEN is not configured." >&2
+            echo "Create a fine-grained PAT limited to the adopt:true consumers" >&2
+            echo "with contents / pull-requests / issues write, and store it as" >&2
+            echo "repository secret REPO_POLICY_AUTOMERGE_TOKEN. See" >&2
+            echo "docs/pat-automerge-token.md." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # The wrappers evaluate at consumers.yml policy_ref. The poller must use
+      # the same ref, or one PR gets classified by two policy versions and the
+      # labels flap.
+      - name: Resolve pinned policy ref
+        id: pin
+        run: |
+          set -euo pipefail
+          ref=$(python -c "import yaml,sys; print(yaml.safe_load(open('consumers.yml'))['policy_ref'])")
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+          echo "policy_ref=${ref}"
+
+      - name: Checkout pinned policy (script + default policy)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.pin.outputs.ref }}
+          path: policy
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install --quiet pyyaml
+
+      # Inputs go through env, not string interpolation into the shell: this
+      # workflow holds a token that can write to every consumer.
+      - name: Poll consumers
+        env:
+          INPUT_REPO: ${{ inputs.repo }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=(--policy-dir policy)
+          if [ -n "${INPUT_REPO:-}" ]; then
+            args+=(--repo "${INPUT_REPO}")
+          fi
+          if [ "${INPUT_DRY_RUN:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python scripts/poll_consumers.py "${args[@]}" | tee poller.log
+
+      - name: Job summary
+        if: always() && hashFiles('poller.log') != ''
+        run: |
+          {
+            echo "## Central PR merge poller"
+            echo
+            echo '```'
+            tail -n 100 poller.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

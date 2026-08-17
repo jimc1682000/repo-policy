@@ -104,6 +104,26 @@ unset AUTOMERGE_TOKEN
 4. 舊 PAT 在 GitHub → **Revoke**  
 5. 密碼管理器更新；日曆設下一次提醒（+11 個月）
 
+## 中央 poller 用的 `REPO_POLICY_AUTOMERGE_TOKEN`
+
+`Central PR merge poller` 從**本 repo** 對所有 `adopt: true` consumer 重新評估開著的 PR，
+所以它需要一把跨 repo 的寫入 token，存成本 repo 的 secret `REPO_POLICY_AUTOMERGE_TOKEN`。
+值可以跟各 repo 的 `AUTOMERGE_TOKEN` 同一把 PAT。
+
+| 項目 | 設定 |
+|------|------|
+| Repository access | **Only select repositories** → 勾 `consumers.yml` 裡 `adopt: true` 那些 |
+| 權限 | Contents R/W、Pull requests R/W、Issues R/W（label 需要） |
+| 存放 | 本 repo 的 Actions secret `REPO_POLICY_AUTOMERGE_TOKEN` |
+
+**本 repo 是 public,這把 token 的半徑比較大**,所以：
+
+- poller 只掛 `schedule` 與 `workflow_dispatch`。**永遠不要**在本 repo 加任何
+  `pull_request_target` 或會執行 PR 內容的 workflow——那等於把這把 token 開放給任何開 PR 的人。
+- 不要把這把 token 用在 `repository-settings-audit`（那支只需要唯讀的 `REPO_POLICY_AUDIT_TOKEN`）。
+
+未設定時 poller 會在第一步就明確失敗並印出設定指引,不會靜默跳過。
+
 ## 與 pin `@v1` 的關係
 
 - PAT / secret 與 workflow pin **無關**  

@@ -4,6 +4,10 @@
 # Usage:
 #   ./scripts/scaffold_consumer.sh film-brain
 #   ./scripts/scaffold_consumer.sh film-brain --default-branch master --write /path/to/clone
+#   ./scripts/scaffold_consumer.sh film-brain --schedule "17,47 * * * *"
+#
+# The wrapper has no cron unless --schedule is given: timed re-evaluation comes
+# from the central poller in this repo, which is free because this repo is public.
 #
 # Does not push. Does not set secrets.
 
@@ -16,12 +20,17 @@ POLICY_REF="v1.1"
 AUTHORS="github-actions[bot],jimc1682000"
 WRITE_DIR=""
 WITH_OVERRIDE=0
+# No cron by default. A per-repo schedule bills one Actions minute per poll in
+# private repos; the free central poller in repo-policy covers the timed
+# re-evaluation instead. Opt in with --schedule only when a repo needs its own.
+SCHEDULE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --default-branch) DEFAULT_BRANCH="$2"; shift 2 ;;
     --policy-ref) POLICY_REF="$2"; shift 2 ;;
     --authors) AUTHORS="$2"; shift 2 ;;
+    --schedule) SCHEDULE="$2"; shift 2 ;;
     --write) WRITE_DIR="$2"; shift 2 ;;
     --with-override) WITH_OVERRIDE=1; shift ;;
     -h|--help)
@@ -44,6 +53,13 @@ if [[ -z "$REPO" ]]; then
   exit 1
 fi
 
+SCHEDULE_BLOCK=""
+if [[ -n "$SCHEDULE" ]]; then
+  SCHEDULE_BLOCK="  schedule:
+    - cron: \"${SCHEDULE}\"
+"
+fi
+
 WORKFLOW=$(cat <<EOF
 name: PR merge automation
 
@@ -54,9 +70,7 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-  schedule:
-    - cron: "17,47 * * * *"
-  workflow_dispatch:
+${SCHEDULE_BLOCK}  workflow_dispatch:
     inputs:
       pr_number:
         description: Optional PR number (empty = all open PRs)
