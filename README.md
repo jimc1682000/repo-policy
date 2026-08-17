@@ -10,6 +10,8 @@
 | 路徑 | 用途 |
 |------|------|
 | `.github/workflows/pr-automerge.yml` | reusable workflow（`workflow_call`） |
+| `.github/workflows/central-poller.yml` | 中央定時重評所有 consumer 的 open PR（本 repo public，不計費） |
+| `scripts/poll_consumers.py` | poller 本體：挑 `adopt: true`、只評估真的有 open PR 的 repo |
 | `scripts/pr_merge_automation.py` | 從 policy YAML 讀規則並執行 label / Codex request / squash merge |
 | `policies/pr-automerge.yml` | 預設風險規則 |
 | `renovate/default.json` | Renovate shared preset（`extends`） |

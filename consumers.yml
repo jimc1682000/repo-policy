@@ -5,6 +5,17 @@
 #
 # Not every personal repo should adopt: skip forks, archived, dead labs,
 # pure dumps with no PR flow.
+#
+# Consumer wrappers carry no cron. Timed re-evaluation comes from
+# .github/workflows/central-poller.yml in this repo, which is free because this
+# repo is public; the same schedule inside a private consumer bills one Actions
+# minute per poll. A repo that genuinely needs its own cron opts in with
+# scaffold_consumer.sh --schedule.
+#
+# Optional per-consumer keys read by the poller (defaults in poll_consumers.py):
+#   policy_override_path        default .github/policies/pr-automerge.yml; "" disables
+#   automation_comment_authors  default "github-actions[bot],jimc1682000"
+#   automation_workflow_name    default "PR merge automation"
 
 owner: jimc1682000
 policy_ref: v1.1
