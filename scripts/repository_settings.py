@@ -292,7 +292,19 @@ def audit_repository(client: GitHubClient, desired: dict[str, Any]) -> dict[str,
         )
 
     for key, expected in desired["repository_settings"].items():
-        actual = info.get(key)
+        # GET /repos omits merge-related fields unless the caller has push access.
+        # A read-only audit PAT therefore cannot observe them; do not treat that
+        # as drift (which would fail --fail-on-drift forever).
+        if key not in info:
+            unavailable.append(
+                {
+                    "area": "repository",
+                    "key": key,
+                    "reason": "not returned by repository API",
+                }
+            )
+            continue
+        actual = info[key]
         if actual != expected:
             changes.append(
                 {"area": "repository", "key": key, "from": actual, "to": expected}

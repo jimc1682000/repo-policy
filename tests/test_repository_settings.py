@@ -330,6 +330,58 @@ def test_audit_does_not_hide_unrelated_ruleset_403():
         audit_repository(Client(), desired)
 
 
+def test_audit_preserves_omitted_merge_settings_as_unavailable():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
+    result = audit_repository(Client(), desired)
+
+    assert not any(change["area"] == "repository" for change in result["changes"])
+    assert {
+        "area": "repository",
+        "key": "allow_squash_merge",
+        "reason": "not returned by repository API",
+    } in result["unavailable"]
+
+
+def test_audit_still_reports_merge_setting_drift_when_field_is_present():
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "allow_squash_merge": False,
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return []
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    desired = desired_state(POLICY, INVENTORY, INVENTORY["repositories"][0])
+    result = audit_repository(Client(), desired)
+
+    assert {
+        "area": "repository",
+        "key": "allow_squash_merge",
+        "from": False,
+        "to": True,
+    } in result["changes"]
+    assert not any(item["area"] == "repository" for item in result["unavailable"])
+
+
 def test_audit_preserves_missing_security_feature_as_unavailable():
     class Client:
         def request(self, method, path, payload=None):
@@ -661,6 +713,79 @@ def test_fail_on_active_still_fails_when_active_has_drift(tmp_path, capsys):
 
     assert result == 1
     assert "DRIFT" in capsys.readouterr().out
+
+
+def test_fail_on_active_does_not_fail_when_merge_settings_are_unobservable(
+    tmp_path, capsys
+):
+    policy_path = tmp_path / "policy.yml"
+    inventory_path = tmp_path / "repositories.yml"
+    inventory = {
+        **INVENTORY,
+        "repositories": [
+            {
+                **INVENTORY["repositories"][0],
+                "classification": "active",
+            }
+        ],
+    }
+    policy_path.write_text(json.dumps(POLICY), encoding="utf-8")
+    inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+    class Client:
+        def request(self, method, path, payload=None):
+            if path == "/user":
+                return {"login": "example"}
+            if path == "/repos/example/app":
+                return {
+                    "default_branch": "main",
+                    "security_and_analysis": {"secret_scanning": {"status": "enabled"}},
+                }
+            if path == "/repos/example/app/rulesets":
+                return [
+                    {
+                        "id": 1,
+                        "name": "baseline",
+                        "source_type": "Repository",
+                    }
+                ]
+            if path == "/repos/example/app/rulesets/1":
+                return {
+                    "id": 1,
+                    "name": "baseline",
+                    "source_type": "Repository",
+                    "rules": [
+                        {"type": "deletion"},
+                        {
+                            "type": "required_status_checks",
+                            "parameters": {
+                                "do_not_enforce_on_create": True,
+                                "required_status_checks": [{"context": "test"}],
+                                "strict_required_status_checks_policy": True,
+                            },
+                        },
+                    ],
+                }
+            if "check-runs" in path:
+                return {"check_runs": [{"name": "test"}], "total_count": 1}
+            raise AssertionError(f"unexpected request: {path}")
+
+    result = main(
+        [
+            "--policy",
+            str(policy_path),
+            "--inventory",
+            str(inventory_path),
+            "--fail-on-active",
+            "--fail-on-drift",
+        ],
+        client=Client(),
+    )
+    output = capsys.readouterr().out
+
+    assert result == 0
+    assert "UNAVAILABLE repository.allow_squash_merge" in output
+    assert "DRIFT repository.allow_squash_merge" not in output
 
 
 def test_output_paths_write_json_and_text_reports(tmp_path, capsys):

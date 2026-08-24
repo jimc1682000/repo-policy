@@ -26,8 +26,14 @@ default branch 的 repository 仍列入報告，但分別標示其分類。
 
 GitHub Free 不提供 private repository rulesets 時，報告會標示
 `UNAVAILABLE ruleset.repo-policy-baseline: GitHub plan limitation`，不把它誤判成
-disabled 或 drift，也不嘗試 apply。Repository API 未回傳的 security feature 同樣
-標成 `UNAVAILABLE`；其他 `403` 仍視為授權錯誤並立即停止。
+disabled 或 drift，也不嘗試 apply。Repository API 未回傳的欄位同樣標成
+`UNAVAILABLE`，包含：
+
+- security feature（private／方案限制時常省略）
+- merge settings（`allow_squash_merge` 等；`GET /repos` 只在 caller 有 push 權限
+  時才回傳。read-only audit PAT 會看不到，不代表設定被改掉）
+
+其他 `403` 仍視為授權錯誤並立即停止。
 
 先確認 `gh auth status` 的 active account 是 repository owner，再執行：
 
@@ -76,9 +82,10 @@ repositories，因此必須使用 **user-scoped read PAT**：
 2. Repository access = **All repositories**（含未來新建）
 3. Permissions（read-only）：
    - Metadata: Read
-   - Administration: Read（rulesets / merge settings 讀取）
+   - Administration: Read（rulesets 讀取）
    - Contents: Read
-   - Checks: Read
+   - fine-grained PAT **沒有 Checks 權限**（GitHub 已從 PAT UI 拿掉）；不要為此改成
+     Contents write。merge settings 欄位會標 `UNAVAILABLE`，不當作 drift。
 4. 寫入 repo secret 名稱：`REPO_POLICY_AUDIT_TOKEN`（勿印出 token）
 5. 在 Actions 手動跑一次 **Repository settings audit** 確認綠燈
 
