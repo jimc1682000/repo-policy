@@ -10,10 +10,13 @@
 | 路徑 | 用途 |
 |------|------|
 | `.github/workflows/pr-automerge.yml` | reusable workflow（`workflow_call`） |
+| `.github/workflows/adr-gate.yml` | read-only reusable PR-level ADR gate |
 | `.github/workflows/central-poller.yml` | 中央定時重評所有 consumer 的 open PR（本 repo public，不計費） |
 | `scripts/poll_consumers.py` | poller 本體：挑 `adopt: true`、只評估真的有 open PR 的 repo |
 | `scripts/pr_merge_automation.py` | 從 policy YAML 讀規則並執行 label / Codex request / squash merge |
+| `scripts/check_adr_required.py` | 讀完整 PR commits/files，判斷是否需要 ADR |
 | `policies/pr-automerge.yml` | 預設風險規則 |
+| `policies/adr-gate.yml` | 架構敏感路徑與 ADR 路徑預設 |
 | `renovate/default.json` | Renovate shared preset（`extends`） |
 | `tests/` | classification 與 guard unit tests |
 | `consumers.yml` | 建議接入的 consumer 清單（非全部個人 repo） |
@@ -95,6 +98,22 @@ branch 出現。每週 audit 需 secret `REPO_POLICY_AUDIT_TOKEN`；完整流程
 - override YAML 只從 caller 的 **default branch** 讀
 - marker comment 只信 `trusted_comment_authors` / `AUTOMATION_COMMENT_AUTHORS`
 - dependency metadata 缺失或 ambiguous → fail closed（`risk:manual-only` 或 high）
+
+## ADR gate
+
+Consumer repo 只需要一個 read-only wrapper workflow，實作集中在
+`.github/workflows/adr-gate.yml`。Checker 透過 GitHub API 讀取完整 PR
+`base...head` 的 commits 與 files：
+
+- `feat`、任何 breaking change、未知 commit type → 需要 ADR。
+- 任一架構敏感路徑被修改 → 需要 ADR，即使 commit 是 `fix`。
+- 測試／一般文件變更不會因路徑規則觸發 ADR。
+- ADR 必須是同一個 PR 內新增或修改的非刪除檔案，預設位於 `docs/adr/*.md`。
+
+Consumer-specific path additions 放在 default branch 的
+`.github/policies/adr-gate.yml`；central workflow 只讀該 branch，不執行 PR
+head。Wrapper 與 central policy 應 pin 到同一個 release tag 或 commit SHA；
+`main` 僅適合開發期接入。
 
 ## Consumer 接入（thin wrapper）
 

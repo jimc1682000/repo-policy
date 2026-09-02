@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 try:
     import yaml
@@ -23,14 +23,28 @@ except ImportError:  # pragma: no cover - runtime installs PyYAML
 
 
 COMMIT_TYPES = frozenset(
-    {"feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"}
+    {
+        "feat",
+        "fix",
+        "docs",
+        "style",
+        "refactor",
+        "perf",
+        "test",
+        "build",
+        "ci",
+        "chore",
+        "revert",
+    }
 )
 LEVEL_ORDER = {"patch": 1, "minor": 2, "major": 3, "unknown": 4}
 CONVENTIONAL_COMMIT_RE = re.compile(
     r"^(?:[A-Z][A-Z0-9]+-[0-9]+\s+)?"
     r"(?P<type>[a-z]+)(?:\([^\r\n)]*\))?(?P<breaking>!)?:"
 )
-BREAKING_FOOTER_RE = re.compile(r"^BREAKING[ -]CHANGE\s*:", re.IGNORECASE | re.MULTILINE)
+BREAKING_FOOTER_RE = re.compile(
+    r"^BREAKING[ -]CHANGE\s*:", re.IGNORECASE | re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -56,8 +70,8 @@ class AdrGatePolicy:
     architecture_sensitive_paths: tuple[str, ...] = (
         "terraform/**",
         "src/**",
-        "lambda_function.py",
-        "lambda_weekly_report.py",
+        "**/lambda_function.py",
+        "**/lambda_weekly_report.py",
         "**/*iam*",
         "**/*alarm*",
     )
@@ -66,10 +80,11 @@ class AdrGatePolicy:
         "tests/**",
         "**/test_*.py",
         "**/*_test.py",
-        "docs/**",
-        "README.md",
     )
     adr_paths: tuple[str, ...] = ("docs/adr/*.md", "docs/adr/**/*.md")
+
+
+DEFAULT_POLICY = AdrGatePolicy()
 
 
 @dataclass(frozen=True)
@@ -109,9 +124,7 @@ def match_path(path: str, pattern: str) -> bool:
         return True
     if pattern.startswith("**/") and fnmatch(path, pattern[3:]):
         return True
-    if "/**/" in pattern and fnmatch(path, pattern.replace("/**/", "/")):
-        return True
-    return False
+    return "/**/" in pattern and fnmatch(path, pattern.replace("/**/", "/"))
 
 
 def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
@@ -125,17 +138,21 @@ def _is_architecture_sensitive(path: str, policy: AdrGatePolicy) -> bool:
 
 
 def _has_adr_change(file: ChangedFile, policy: AdrGatePolicy) -> bool:
-    return file.status.lower() != "deleted" and _matches_any(file.path, policy.adr_paths)
+    return file.status.lower() != "deleted" and _matches_any(
+        file.path, policy.adr_paths
+    )
 
 
-def evaluate(change_set: ChangeSet, policy: AdrGatePolicy = AdrGatePolicy()) -> AdrDecision:
+def evaluate(change_set: ChangeSet, policy: AdrGatePolicy | None = None) -> AdrDecision:
     """Evaluate whether a PR range contains a required and present ADR."""
+    policy = policy or DEFAULT_POLICY
     levels = [parse_commit_level(message) for message in change_set.commits]
     level = max(levels or ["unknown"], key=LEVEL_ORDER.__getitem__)
     sensitive_files = [
         file.path
         for file in change_set.files
-        if _is_architecture_sensitive(file.path, policy) and file.status.lower() != "deleted"
+        if _is_architecture_sensitive(file.path, policy)
+        and file.status.lower() != "deleted"
     ]
     adr_changed = any(_has_adr_change(file, policy) for file in change_set.files)
 
@@ -147,7 +164,9 @@ def evaluate(change_set: ChangeSet, policy: AdrGatePolicy = AdrGatePolicy()) -> 
     elif level == "unknown":
         reasons.append("unknown commit type; fail closed")
     if sensitive_files:
-        reasons.append("architecture-sensitive path: " + ", ".join(sorted(sensitive_files)))
+        reasons.append(
+            "architecture-sensitive path: " + ", ".join(sorted(sensitive_files))
+        )
 
     required = level in {"major", "minor", "unknown"} or bool(sensitive_files)
     satisfied = not required or adr_changed
@@ -165,11 +184,13 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        raise ValueError(f"ADR policy must be a mapping: {path}")
+        raise TypeError(f"ADR policy must be a mapping: {path}")
     return value
 
 
-def _merge_policy_data(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+def _merge_policy_data(
+    base: dict[str, Any], override: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
         if key in {
@@ -186,13 +207,17 @@ def _merge_policy_data(base: dict[str, Any], override: dict[str, Any]) -> dict[s
 
 def policy_from_dict(data: dict[str, Any]) -> AdrGatePolicy:
     return AdrGatePolicy(
-        architecture_sensitive_paths=tuple(data.get("architecture_sensitive_paths") or ()),
+        architecture_sensitive_paths=tuple(
+            data.get("architecture_sensitive_paths") or ()
+        ),
         architecture_exclude_paths=tuple(data.get("architecture_exclude_paths") or ()),
         adr_paths=tuple(data.get("adr_paths") or ()),
     )
 
 
-def load_policy(path: str | Path, override_path: str | Path | None = None) -> AdrGatePolicy:
+def load_policy(
+    path: str | Path, override_path: str | Path | None = None
+) -> AdrGatePolicy:
     data = _load_yaml(Path(path))
     if override_path:
         override = Path(override_path)
@@ -205,7 +230,7 @@ def _run_gh(*args: str) -> str:
     gh = shutil.which("gh")
     if gh is None:
         raise RuntimeError("gh is required but was not found in PATH")
-    result = subprocess.run(  # noqa: S603
+    result = subprocess.run(
         [gh, *args],
         capture_output=True,
         text=True,
@@ -224,7 +249,11 @@ def _gh_json(*args: str) -> Any:
 def _flatten_pages(value: Any) -> list[dict[str, Any]]:
     if not value:
         return []
-    if isinstance(value, list) and value and all(isinstance(page, list) for page in value):
+    if (
+        isinstance(value, list)
+        and value
+        and all(isinstance(page, list) for page in value)
+    ):
         return [item for page in value for item in page]
     if isinstance(value, list):
         return value
@@ -234,10 +263,14 @@ def _flatten_pages(value: Any) -> list[dict[str, Any]]:
 def collect_change_set(repo: str, pr_number: int) -> ChangeSet:
     """Read all commits and files for a PR through the GitHub API."""
     commits = _flatten_pages(
-        _gh_json("api", f"repos/{repo}/pulls/{pr_number}/commits", "--paginate", "--slurp")
+        _gh_json(
+            "api", f"repos/{repo}/pulls/{pr_number}/commits", "--paginate", "--slurp"
+        )
     )
     files = _flatten_pages(
-        _gh_json("api", f"repos/{repo}/pulls/{pr_number}/files", "--paginate", "--slurp")
+        _gh_json(
+            "api", f"repos/{repo}/pulls/{pr_number}/files", "--paginate", "--slurp"
+        )
     )
     return ChangeSet(
         commits=tuple(item.get("commit", {}).get("message", "") for item in commits),

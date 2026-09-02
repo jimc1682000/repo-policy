@@ -3,8 +3,8 @@
 architecture_sensitive_paths:
   - terraform/**
   - src/**
-  - lambda_function.py
-  - lambda_weekly_report.py
+  - "**/lambda_function.py"
+  - "**/lambda_weekly_report.py"
   - "**/*iam*"
   - "**/*alarm*"
 
@@ -13,8 +13,6 @@ architecture_exclude_paths:
   - tests/**
   - "**/test_*.py"
   - "**/*_test.py"
-  - docs/**
-  - README.md
 
 adr_paths:
   - docs/adr/*.md
