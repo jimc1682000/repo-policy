@@ -18,7 +18,9 @@
 #   automation_workflow_name    default "PR merge automation"
 
 owner: jimc1682000
-policy_ref: v1.2
+# This is the automerge poller's pin; keep it aligned with existing consumer
+# PR-merge wrappers until those wrappers are migrated to a newer release.
+policy_ref: v1.1
 secret_name: AUTOMERGE_TOKEN
 
 consumers:
