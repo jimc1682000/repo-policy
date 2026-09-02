@@ -78,8 +78,10 @@ class AdrGatePolicy:
     architecture_exclude_paths: tuple[str, ...] = (
         "src/tests/**",
         "tests/**",
+        "**/tests/**",
         "**/test_*.py",
-        "**/*_test.py",
+        "**/*_test.*",
+        "**/*.test.*",
     )
     adr_paths: tuple[str, ...] = ("docs/adr/*.md", "docs/adr/**/*.md")
 
@@ -208,10 +210,14 @@ def _merge_policy_data(
 def policy_from_dict(data: dict[str, Any]) -> AdrGatePolicy:
     return AdrGatePolicy(
         architecture_sensitive_paths=tuple(
-            data.get("architecture_sensitive_paths") or ()
+            data.get("architecture_sensitive_paths")
+            or DEFAULT_POLICY.architecture_sensitive_paths
         ),
-        architecture_exclude_paths=tuple(data.get("architecture_exclude_paths") or ()),
-        adr_paths=tuple(data.get("adr_paths") or ()),
+        architecture_exclude_paths=tuple(
+            data.get("architecture_exclude_paths")
+            or DEFAULT_POLICY.architecture_exclude_paths
+        ),
+        adr_paths=tuple(data.get("adr_paths") or DEFAULT_POLICY.adr_paths),
     )
 
 

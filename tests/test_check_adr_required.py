@@ -9,6 +9,7 @@ from scripts.check_adr_required import (
     collect_change_set,
     evaluate,
     parse_commit_level,
+    policy_from_dict,
 )
 
 
@@ -71,6 +72,8 @@ def test_tests_and_docs_only_do_not_require_an_adr() -> None:
             "docs: explain the fixture",
             files=(
                 ChangedFile("src/tests/test_parser.py"),
+                ChangedFile("src/handler_test.go"),
+                ChangedFile("src/handler.test.ts"),
                 ChangedFile("docs/testing.md"),
             ),
         )
@@ -78,6 +81,18 @@ def test_tests_and_docs_only_do_not_require_an_adr() -> None:
 
     assert decision.required is False
     assert decision.ok is True
+
+
+def test_partial_policy_keeps_safe_central_defaults() -> None:
+    decision = evaluate(
+        change_set(
+            "fix: cover a test-only change",
+            files=(ChangedFile("src/handler_test.go"),),
+        ),
+        policy_from_dict({}),
+    )
+
+    assert decision.required is False
 
 
 def test_feat_with_only_an_adr_change_is_satisfied() -> None:

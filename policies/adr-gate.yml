@@ -11,8 +11,10 @@ architecture_sensitive_paths:
 architecture_exclude_paths:
   - src/tests/**
   - tests/**
+  - "**/tests/**"
   - "**/test_*.py"
-  - "**/*_test.py"
+  - "**/*_test.*"
+  - "**/*.test.*"
 
 adr_paths:
   - docs/adr/*.md
