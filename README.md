@@ -23,7 +23,7 @@
 | `docs/pat-automerge-token.md` | PAT 一年輪替 runbook |
 | `scripts/set_automerge_token.sh` | 候選=gh login；過濾=PAT probe；寫入 secret（不印 token） |
 | `scripts/check_automerge_token.sh` | 同上過濾後檢查 secret 名稱是否存在 |
-| `scripts/scaffold_consumer.sh` | 產生 thin wrapper 範本 |
+| `scripts/scaffold_consumer.sh` | 產生 PR merge 與 PR-level ADR thin wrapper 範本 |
 | `scripts/list_consumers.sh` | 列出 adopt / wrapper 狀態 |
 | `policies/repository-settings.yml` | 共用 security / merge baseline 與技術棧 profiles |
 | `repositories.yml` | 中央管理 inventory；自動探索 owner 的全部 repositories |
@@ -146,10 +146,10 @@ permissions:
 
 jobs:
   evaluate:
-    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.1
+    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.2
     with:
       default_branch: master
-      policy_ref: v1.1
+      policy_ref: v1.2
       pr_number: ${{ github.event.pull_request.number || '' }}
       policy_override_path: .github/policies/pr-automerge.yml
       automation_comment_authors: github-actions[bot],YOUR_GITHUB_LOGIN
@@ -239,6 +239,10 @@ python scripts/pr_merge_automation.py
 ```bash
 ./scripts/list_consumers.sh          # inventory + 是否已有 wrapper
 ./scripts/scaffold_consumer.sh fhr --default-branch main --write /path/to/fhr --with-override
+# 會產生：
+#   .github/workflows/pr-merge-automation.yml
+#   .github/workflows/adr-gate.yml
+#   .github/policies/adr-gate.yml（只放 repo-specific additions）
 
 # PAT secret：目標 = PAT 允許的 repos（非硬編碼 consumers.yml）
 export AUTOMERGE_TOKEN='…'           # 從密碼管理器；勿 echo
@@ -264,10 +268,10 @@ unset AUTOMERGE_TOKEN
 生產環境建議 pin：
 
 ```yaml
-uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.1
+uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.2
 # 並傳
 with:
-  policy_ref: v1.1
+  policy_ref: v1.2
 ```
 
 `main` 適合個人 repo 快速迭代；對外或高敏感 repo 請 pin tag / commit SHA。

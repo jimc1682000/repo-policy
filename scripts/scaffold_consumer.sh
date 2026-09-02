@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print (or write) a thin PR-merge wrapper for a consumer repo.
+# Print (or write) thin PR-merge and PR-level ADR wrappers for a consumer repo.
 #
 # Usage:
 #   ./scripts/scaffold_consumer.sh film-brain
@@ -13,10 +13,9 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO=""
 DEFAULT_BRANCH="main"
-POLICY_REF="v1.1"
+POLICY_REF="v1.2"
 AUTHORS="github-actions[bot],jimc1682000"
 WRITE_DIR=""
 WITH_OVERRIDE=0
@@ -106,6 +105,36 @@ jobs:
 EOF
 )
 
+ADR_WORKFLOW=$(cat <<EOF
+name: ADR gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    branches: [${DEFAULT_BRANCH}]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  adr:
+    uses: jimc1682000/repo-policy/.github/workflows/adr-gate.yml@${POLICY_REF}
+    with:
+      default_branch: ${DEFAULT_BRANCH}
+      pr_number: \${{ github.event.pull_request.number }}
+      policy_override_path: .github/policies/adr-gate.yml
+      policy_ref: ${POLICY_REF}
+EOF
+)
+
+ADR_OVERRIDE=$(cat <<'EOF'
+# Optional repo-specific additions to the central ADR gate policy.
+# architecture_sensitive_paths:
+#   - infrastructure/**
+EOF
+)
+
 OVERRIDE=$(cat <<'EOF'
 # Repo-specific overrides (unioned with jimc1682000/repo-policy defaults).
 # Add high_risk_dependencies / high_risk_file_patterns as needed.
@@ -129,8 +158,12 @@ EOF
 if [[ -n "$WRITE_DIR" ]]; then
   mkdir -p "$WRITE_DIR/.github/workflows" "$WRITE_DIR/.github/policies"
   printf '%s\n' "$WORKFLOW" >"$WRITE_DIR/.github/workflows/pr-merge-automation.yml"
+  printf '%s\n' "$ADR_WORKFLOW" >"$WRITE_DIR/.github/workflows/adr-gate.yml"
   if [[ "$WITH_OVERRIDE" -eq 1 ]] || [[ ! -f "$WRITE_DIR/.github/policies/pr-automerge.yml" ]]; then
     printf '%s\n' "$OVERRIDE" >"$WRITE_DIR/.github/policies/pr-automerge.yml"
+  fi
+  if [[ ! -f "$WRITE_DIR/.github/policies/adr-gate.yml" ]]; then
+    printf '%s\n' "$ADR_OVERRIDE" >"$WRITE_DIR/.github/policies/adr-gate.yml"
   fi
   if [[ ! -f "$WRITE_DIR/renovate.json" ]]; then
     printf '%s\n' "$RENOVATE" >"$WRITE_DIR/renovate.json"
@@ -141,8 +174,14 @@ else
   echo "=== .github/workflows/pr-merge-automation.yml ==="
   printf '%s\n' "$WORKFLOW"
   echo
+  echo "=== .github/workflows/adr-gate.yml ==="
+  printf '%s\n' "$ADR_WORKFLOW"
+  echo
   echo "=== .github/policies/pr-automerge.yml (optional) ==="
   printf '%s\n' "$OVERRIDE"
+  echo
+  echo "=== .github/policies/adr-gate.yml (optional) ==="
+  printf '%s\n' "$ADR_OVERRIDE"
   echo
   echo "=== renovate.json (optional) ==="
   printf '%s\n' "$RENOVATE"

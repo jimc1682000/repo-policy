@@ -18,7 +18,7 @@
 #   automation_workflow_name    default "PR merge automation"
 
 owner: jimc1682000
-policy_ref: v1.1
+policy_ref: v1.2
 secret_name: AUTOMERGE_TOKEN
 
 consumers:
