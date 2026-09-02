@@ -154,7 +154,6 @@ def evaluate(change_set: ChangeSet, policy: AdrGatePolicy | None = None) -> AdrD
         file.path
         for file in change_set.files
         if _is_architecture_sensitive(file.path, policy)
-        and file.status.lower() != "deleted"
     ]
     adr_changed = any(_has_adr_change(file, policy) for file in change_set.files)
 

@@ -144,6 +144,19 @@ def test_deleted_adr_does_not_satisfy_the_gate() -> None:
     assert decision.ok is False
 
 
+def test_deleting_an_architecture_sensitive_file_requires_an_adr() -> None:
+    decision = evaluate(
+        change_set(
+            "fix: remove an obsolete alarm path",
+            files=(ChangedFile("terraform/alarms.tf", "deleted"),),
+        )
+    )
+
+    assert decision.required is True
+    assert decision.satisfied is False
+    assert decision.ok is False
+
+
 def test_unknown_commit_is_fail_closed() -> None:
     decision = evaluate(change_set("update things", files=(ChangedFile("README.md"),)))
 
