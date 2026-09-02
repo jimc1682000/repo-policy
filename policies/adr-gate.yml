@@ -1,0 +1,21 @@
+# Central defaults for the PR-level architecture decision record gate.
+# Consumer repositories may add patterns in their default-branch override.
+architecture_sensitive_paths:
+  - terraform/**
+  - src/**
+  - lambda_function.py
+  - lambda_weekly_report.py
+  - "**/*iam*"
+  - "**/*alarm*"
+
+architecture_exclude_paths:
+  - src/tests/**
+  - tests/**
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - docs/**
+  - README.md
+
+adr_paths:
+  - docs/adr/*.md
+  - docs/adr/**/*.md
