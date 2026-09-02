@@ -41,4 +41,3 @@ def test_reusable_workflow_does_not_execute_caller_pr_code() -> None:
     assert "check_adr_required.py" in run_commands
     assert "actions/checkout@v5" in "\n".join(step.get("uses", "") for step in steps)
     assert "github.event.pull_request.head" not in run_commands
-
