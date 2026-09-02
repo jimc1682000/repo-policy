@@ -3,7 +3,7 @@
 共用 GitHub repo 設定：PR risk classification / low-risk automerge、Renovate preset，
 以及個人帳號 repositories 的 security / quality desired-state 管理。
 
-各 consumer repo **不要**複製整份 merge 邏輯，只留 thin wrapper workflow + 可選 override YAML。
+各 consumer repo **不要**複製整份 merge／ADR 邏輯，只留 thin wrapper workflows + 可選 override YAML。
 
 ## 內容
 
