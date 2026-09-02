@@ -1,0 +1,91 @@
+# Read-only reusable PR-level ADR gate.
+#
+# Security:
+# - The checker and default policy come from this repository at a caller-pinned ref.
+# - The optional consumer override is read from the consumer default branch, never PR head.
+# - The workflow does not checkout or execute consumer source code.
+
+name: ADR gate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      default_branch:
+        description: Consumer default branch containing the policy override
+        type: string
+        required: true
+      pr_number:
+        description: Pull request number to evaluate
+        type: number
+        required: true
+      policy_override_path:
+        description: Optional override path on the consumer default branch
+        type: string
+        default: ".github/policies/adr-gate.yml"
+      policy_repository:
+        description: Repository that hosts the checker and default policy
+        type: string
+        default: jimc1682000/repo-policy
+      policy_ref:
+        description: Caller-pinned policy ref; never the PR head
+        type: string
+        default: main
+    secrets:
+      token:
+        description: Optional read-only token for the GitHub API
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      GITHUB_TOKEN: ${{ secrets.token || github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+    steps:
+      - name: Checkout policy repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.policy_repository }}
+          ref: ${{ inputs.policy_ref }}
+          path: repo-policy
+          persist-credentials: false
+
+      - name: Checkout consumer default-branch override
+        if: inputs.policy_override_path != ''
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.default_branch }}
+          sparse-checkout: |
+            ${{ inputs.policy_override_path }}
+          sparse-checkout-cone-mode: false
+          path: consumer
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install checker dependency
+        run: pip install --quiet pyyaml
+
+      - name: Evaluate ADR policy
+        env:
+          POLICY_OVERRIDE_PATH: ${{ inputs.policy_override_path != '' && format('consumer/{0}', inputs.policy_override_path) || '' }}
+        run: |
+          args=(
+            --repo "$GITHUB_REPOSITORY"
+            --pr-number "$PR_NUMBER"
+            --policy repo-policy/policies/adr-gate.yml
+          )
+          if [[ -n "$POLICY_OVERRIDE_PATH" && -f "$POLICY_OVERRIDE_PATH" ]]; then
+            args+=(--override "$POLICY_OVERRIDE_PATH")
+          fi
+          python repo-policy/scripts/check_adr_required.py "${args[@]}"
