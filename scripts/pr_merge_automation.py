@@ -259,7 +259,14 @@ PR_FIELDS = (
 )
 
 
-def load_status_check_rollup(repo: str, number: int) -> list[dict[str, Any]]:
+def load_status_check_rollup(repo: str, number: int, head_oid: str) -> list[dict[str, Any]]:
+    """Read the rollup, and refuse it if the head moved between the two calls.
+
+    The rollup is a second `gh pr view`, so a force-push landing between the
+    two responses would attach commit B's checks to commit A's PR. The merge
+    guard's --match-head-commit only proves the head is still A at merge time,
+    not that the green checks were A's, so the head is compared here instead.
+    """
     data = gh_json(
         "pr",
         "view",
@@ -267,10 +274,18 @@ def load_status_check_rollup(repo: str, number: int) -> list[dict[str, Any]]:
         "--repo",
         repo,
         "--json",
-        "statusCheckRollup",
+        "headRefOid,statusCheckRollup",
         token=checks_token(),
-    )
-    return (data or {}).get("statusCheckRollup") or []
+    ) or {}
+    rollup_oid = data.get("headRefOid")
+    if rollup_oid != head_oid:
+        print(
+            f"{repo}#{number}: head moved while reading checks "
+            f"({head_oid} -> {rollup_oid}); skipping this cycle",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return data.get("statusCheckRollup") or []
 
 
 def load_pr(repo: str, number: int) -> dict[str, Any]:
@@ -283,7 +298,7 @@ def load_pr(repo: str, number: int) -> dict[str, Any]:
         "--json",
         ",".join(PR_FIELDS),
     )
-    pr["statusCheckRollup"] = load_status_check_rollup(repo, number)
+    pr["statusCheckRollup"] = load_status_check_rollup(repo, number, pr["headRefOid"])
     return pr
 
 

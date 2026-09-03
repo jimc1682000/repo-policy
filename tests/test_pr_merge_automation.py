@@ -533,9 +533,9 @@ class TestCheckRollupToken:
 
         def fake_gh_json(*args: str, token: str | None = None):
             calls.append((args, token))
-            if args[-1] == "statusCheckRollup":
-                return {"statusCheckRollup": rollup}
-            return {"number": 1, "title": "x"}
+            if "statusCheckRollup" in args[-1]:
+                return {"headRefOid": "aaa111", "statusCheckRollup": rollup}
+            return {"number": 1, "title": "x", "headRefOid": "aaa111"}
 
         monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
         pr = pr_merge_automation.load_pr("owner/repo", 1)
@@ -548,7 +548,7 @@ class TestCheckRollupToken:
         assert fields_token is None
         assert "statusCheckRollup" not in fields_args[-1]
         assert rollup_token == "job-token"
-        assert rollup_args[-1] == "statusCheckRollup"
+        assert rollup_args[-1] == "headRefOid,statusCheckRollup"
 
     def test_rollup_falls_back_to_default_token_when_unset(self, monkeypatch):
         """The central poller is cross-repo: no job token to hand over."""
@@ -557,9 +557,9 @@ class TestCheckRollupToken:
 
         def fake_gh_json(*args: str, token: str | None = None):
             tokens.append(token)
-            if args[-1] == "statusCheckRollup":
-                return {"statusCheckRollup": []}
-            return {"number": 1}
+            if "statusCheckRollup" in args[-1]:
+                return {"headRefOid": "aaa111", "statusCheckRollup": []}
+            return {"number": 1, "headRefOid": "aaa111"}
 
         monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
         pr_merge_automation.load_pr("owner/repo", 1)
@@ -571,7 +571,9 @@ class TestCheckRollupToken:
         monkeypatch.setattr(
             pr_merge_automation,
             "gh_json",
-            lambda *args, token=None: None if args[-1] == "statusCheckRollup" else {},
+            lambda *args, token=None: {"headRefOid": "aaa111"}
+            if "statusCheckRollup" in args[-1]
+            else {"headRefOid": "aaa111"},
         )
         assert pr_merge_automation.load_pr("owner/repo", 1)["statusCheckRollup"] == []
 
@@ -597,3 +599,16 @@ class TestCheckRollupToken:
         pr_merge_automation.run_gh("pr", "view")
         # None means "inherit": gh keeps using the ambient PAT.
         assert captured["env"] is None
+
+    def test_head_moving_between_the_two_calls_aborts(self, monkeypatch):
+        """A force-push mid-read must not attach commit B's checks to commit A."""
+        monkeypatch.delenv("GH_CHECKS_TOKEN", raising=False)
+
+        def fake_gh_json(*args: str, token: str | None = None):
+            if "statusCheckRollup" in args[-1]:
+                return {"headRefOid": "bbb222", "statusCheckRollup": []}
+            return {"number": 1, "headRefOid": "aaa111"}
+
+        monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
+        with pytest.raises(SystemExit):
+            pr_merge_automation.load_pr("owner/repo", 1)
