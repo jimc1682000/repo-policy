@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import pr_merge_automation
 from scripts.pr_merge_automation import (
     Decision,
     classify,
@@ -500,3 +501,114 @@ class TestRootLevelLockfilesAreInAllowlist:
         )
         d = classify(pr, "master", policy)
         assert d.risk == "risk:medium"
+
+
+class TestCheckRollupToken:
+    """The check rollup is read with its own token; everything else keeps the PAT.
+
+    A fine-grained PAT has no Checks permission to grant, so on a private repo
+    `statusCheckRollup` is unreadable and used to fail the whole `gh pr view`.
+    """
+
+    def test_checks_token_defaults_to_none(self, monkeypatch):
+        monkeypatch.delenv("GH_CHECKS_TOKEN", raising=False)
+        assert pr_merge_automation.checks_token() is None
+
+    def test_blank_checks_token_is_none(self, monkeypatch):
+        monkeypatch.setenv("GH_CHECKS_TOKEN", "")
+        assert pr_merge_automation.checks_token() is None
+
+    def test_rollup_is_a_separate_call_with_its_own_token(self, monkeypatch):
+        monkeypatch.setenv("GH_CHECKS_TOKEN", "job-token")
+        calls: list[tuple[tuple[str, ...], str | None]] = []
+        rollup = [
+            {
+                "__typename": "CheckRun",
+                "name": "test",
+                "status": "COMPLETED",
+                "conclusion": "SUCCESS",
+                "workflowName": "CI",
+            }
+        ]
+
+        def fake_gh_json(*args: str, token: str | None = None):
+            calls.append((args, token))
+            if "statusCheckRollup" in args[-1]:
+                return {"headRefOid": "aaa111", "statusCheckRollup": rollup}
+            return {"number": 1, "title": "x", "headRefOid": "aaa111"}
+
+        monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
+        pr = pr_merge_automation.load_pr("owner/repo", 1)
+
+        assert pr["statusCheckRollup"] == rollup
+        assert len(calls) == 2
+        fields_args, fields_token = calls[0]
+        rollup_args, rollup_token = calls[1]
+        # The PAT (gh's ambient GH_TOKEN) stays the default for the field read.
+        assert fields_token is None
+        assert "statusCheckRollup" not in fields_args[-1]
+        assert rollup_token == "job-token"
+        assert rollup_args[-1] == "headRefOid,statusCheckRollup"
+
+    def test_rollup_falls_back_to_default_token_when_unset(self, monkeypatch):
+        """The central poller is cross-repo: no job token to hand over."""
+        monkeypatch.delenv("GH_CHECKS_TOKEN", raising=False)
+        tokens: list[str | None] = []
+
+        def fake_gh_json(*args: str, token: str | None = None):
+            tokens.append(token)
+            if "statusCheckRollup" in args[-1]:
+                return {"headRefOid": "aaa111", "statusCheckRollup": []}
+            return {"number": 1, "headRefOid": "aaa111"}
+
+        monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
+        pr_merge_automation.load_pr("owner/repo", 1)
+        assert tokens == [None, None]
+
+    def test_missing_rollup_field_becomes_empty_list(self, monkeypatch):
+        """has_green_checks must see [] (blocks merge), never None (crashes)."""
+        monkeypatch.delenv("GH_CHECKS_TOKEN", raising=False)
+        monkeypatch.setattr(
+            pr_merge_automation,
+            "gh_json",
+            lambda *args, token=None: {"headRefOid": "aaa111"}
+            if "statusCheckRollup" in args[-1]
+            else {"headRefOid": "aaa111"},
+        )
+        assert pr_merge_automation.load_pr("owner/repo", 1)["statusCheckRollup"] == []
+
+    def test_run_gh_injects_the_token_into_the_child_env(self, monkeypatch):
+        captured: dict = {}
+
+        class Result:
+            returncode = 0
+            stdout = "{}"
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return Result()
+
+        monkeypatch.setattr(pr_merge_automation.subprocess, "run", fake_run)
+        monkeypatch.setattr(pr_merge_automation, "GH_BIN", "/usr/bin/gh")
+
+        pr_merge_automation.run_gh("pr", "view", token="job-token")
+        assert captured["env"]["GH_TOKEN"] == "job-token"
+        assert captured["env"]["GITHUB_TOKEN"] == "job-token"
+
+        pr_merge_automation.run_gh("pr", "view")
+        # None means "inherit": gh keeps using the ambient PAT.
+        assert captured["env"] is None
+
+    def test_head_moving_between_the_two_calls_aborts(self, monkeypatch):
+        """A force-push mid-read must not attach commit B's checks to commit A."""
+        monkeypatch.delenv("GH_CHECKS_TOKEN", raising=False)
+
+        def fake_gh_json(*args: str, token: str | None = None):
+            if "statusCheckRollup" in args[-1]:
+                return {"headRefOid": "bbb222", "statusCheckRollup": []}
+            return {"number": 1, "headRefOid": "aaa111"}
+
+        monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
+        with pytest.raises(SystemExit):
+            pr_merge_automation.load_pr("owner/repo", 1)

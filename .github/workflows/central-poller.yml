@@ -34,6 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      # No GH_CHECKS_TOKEN here on purpose: the poller reads other repositories,
+      # where this job's own token has no access, so the check rollup has to go
+      # through the PAT like everything else. That means the poller still cannot
+      # evaluate checks on a private consumer with a fine-grained PAT — see
+      # docs/pat-automerge-token.md.
       GH_TOKEN: ${{ secrets.REPO_POLICY_AUTOMERGE_TOKEN }}
       GITHUB_TOKEN: ${{ secrets.REPO_POLICY_AUTOMERGE_TOKEN }}
     steps:
