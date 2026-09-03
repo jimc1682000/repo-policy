@@ -178,16 +178,36 @@ def load_policy(
     return policy_from_dict(data)
 
 
-def run_gh(*args: str, input_text: str | None = None) -> str:
+def checks_token() -> str | None:
+    """Token used only for reading a PR's check rollup, or None for the default.
+
+    A fine-grained PAT cannot read check runs on a private repository: GitHub
+    exposes no Checks permission for that token type, so `statusCheckRollup`
+    answers "Resource not accessible by personal access token" and takes the
+    whole `gh pr view` down with it. The reusable workflow therefore hands us
+    the job's own GITHUB_TOKEN, which holds checks:read on the repository it
+    runs in, and the PAT keeps doing the writes it is actually needed for.
+
+    The central poller reads other repositories, where its own job token has no
+    access at all, so it leaves this unset and the PAT is used as before.
+    """
+    return os.getenv("GH_CHECKS_TOKEN") or None
+
+
+def run_gh(*args: str, input_text: str | None = None, token: str | None = None) -> str:
     if GH_BIN is None:
         print("gh is required but was not found in PATH", file=sys.stderr)
         raise SystemExit(1)
+    env = None
+    if token:
+        env = {**os.environ, "GH_TOKEN": token, "GITHUB_TOKEN": token}
     result = subprocess.run(  # noqa: S603
         [GH_BIN, *args],
         input=input_text,
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
     if result.returncode != 0:
         print(result.stderr.strip(), file=sys.stderr)
@@ -195,8 +215,8 @@ def run_gh(*args: str, input_text: str | None = None) -> str:
     return result.stdout
 
 
-def gh_json(*args: str) -> Any:
-    output = run_gh(*args)
+def gh_json(*args: str, token: str | None = None) -> Any:
+    output = run_gh(*args, token=token)
     return json.loads(output) if output.strip() else None
 
 
@@ -217,36 +237,54 @@ def pr_numbers(repo: str) -> list[int]:
     return [int(pr["number"]) for pr in prs]
 
 
-def load_pr(repo: str, number: int) -> dict[str, Any]:
-    return gh_json(
+# statusCheckRollup is fetched separately (see checks_token): asking for it in
+# the same call would make one unreadable field fail every other field too.
+PR_FIELDS = (
+    "number",
+    "title",
+    "body",
+    "author",
+    "baseRefName",
+    "headRefName",
+    "headRefOid",
+    "isDraft",
+    "labels",
+    "additions",
+    "deletions",
+    "changedFiles",
+    "mergeable",
+    "files",
+    "commits",
+    "url",
+)
+
+
+def load_status_check_rollup(repo: str, number: int) -> list[dict[str, Any]]:
+    data = gh_json(
         "pr",
         "view",
         str(number),
         "--repo",
         repo,
         "--json",
-        ",".join(
-            [
-                "number",
-                "title",
-                "body",
-                "author",
-                "baseRefName",
-                "headRefName",
-                "headRefOid",
-                "isDraft",
-                "labels",
-                "additions",
-                "deletions",
-                "changedFiles",
-                "mergeable",
-                "files",
-                "commits",
-                "statusCheckRollup",
-                "url",
-            ]
-        ),
+        "statusCheckRollup",
+        token=checks_token(),
     )
+    return (data or {}).get("statusCheckRollup") or []
+
+
+def load_pr(repo: str, number: int) -> dict[str, Any]:
+    pr = gh_json(
+        "pr",
+        "view",
+        str(number),
+        "--repo",
+        repo,
+        "--json",
+        ",".join(PR_FIELDS),
+    )
+    pr["statusCheckRollup"] = load_status_check_rollup(repo, number)
+    return pr
 
 
 def is_dependabot(pr: dict[str, Any]) -> bool:

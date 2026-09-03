@@ -22,6 +22,35 @@ Reusable workflow 內：`secrets.token || github.token`。
 | Org | 有 Organization 後可改 **Org secret + Selected repos** |
 | 輪替 | 到期前用本 repo 腳本更新；**PAT 本身 GitHub 不會 auto-renew** |
 
+## PAT 讀不到 check rollup（設計上如此）
+
+Fine-grained PAT **沒有** Checks 這個 repository permission 可以勾——GitHub 的
+[權限對照表](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)
+裡不存在該項，check runs API 的文件也只寫「classic PAT 需要 `repo` scope」。
+所以在 private repo 上，用 PAT 查 `statusCheckRollup` 一定會拿到：
+
+```
+GraphQL: Resource not accessible by personal access token
+  (repository.pullRequest.statusCheckRollup.nodes.0.commit.statusCheckRollup)
+```
+
+而且因為那個欄位跟其他欄位在同一次 `gh pr view` 裡，整包都會失敗。Public repo
+沒事——check runs 與 commit statuses 用 metadata 層級就讀得到。
+
+`scripts/pr_merge_automation.py` 因此把 rollup 拆成獨立一次查詢，走
+`GH_CHECKS_TOKEN`：
+
+| 呼叫端 | `GH_CHECKS_TOKEN` | 效果 |
+|--------|-------------------|------|
+| `pr-automerge.yml`（在 consumer repo 裡跑） | `github.token` | job 自己的 token 帶 `checks: read`，讀得到；PAT 只負責 merge/label/comment |
+| `central-poller.yml`（跨 repo 輪詢） | 不設 | 自己的 job token 對別的 repo 沒有權限，只能沿用 PAT |
+
+**已知限制**：poller 因此無法評估 private consumer 的 checks。要讓 poller 也能
+work，只有換 classic PAT 帶 `repo` scope 一條路，那與本文件「用 fine-grained」
+的原則衝突，尚未採用。PR 事件觸發的那條路（絕大多數情境）不受影響。
+
+所以下面的權限清單**不需要**、也無法加上任何 check 相關項目。
+
 ## 首次建立（手動，約 5 分鐘）
 
 1. 開：https://github.com/settings/personal-access-tokens/new  
