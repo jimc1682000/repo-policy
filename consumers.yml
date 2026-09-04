@@ -20,7 +20,7 @@
 owner: jimc1682000
 # This is the automerge poller's pin; keep it aligned with existing consumer
 # PR-merge wrappers until those wrappers are migrated to a newer release.
-policy_ref: v1.1
+policy_ref: v1.3
 secret_name: AUTOMERGE_TOKEN
 
 consumers:
