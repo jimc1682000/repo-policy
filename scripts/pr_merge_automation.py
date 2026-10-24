@@ -33,6 +33,9 @@ LIST_UNION_KEYS = frozenset(
         "dependabot_structural_file_patterns",
         "manual_only_title_keywords",
         "high_risk_title_keywords",
+        "approval_actors",
+        "approval_excluded_file_patterns",
+        "codex_reviewer_logins",
     }
 )
 
@@ -58,6 +61,15 @@ class Policy:
     small_pr_max_files: int
     small_pr_max_lines: int
     automation_workflow_name: str
+    approval: dict[str, str]
+    approval_actors: tuple[str, ...]
+    approval_excluded_file_patterns: tuple[str, ...]
+    codex_reviewer_logins: tuple[str, ...]
+    merge_method: str
+
+    @property
+    def approval_label(self) -> str:
+        return self.approval.get("label", "")
 
     @property
     def looks_good_marker(self) -> str:
@@ -125,6 +137,9 @@ def policy_from_dict(data: dict[str, Any]) -> Policy:
     high_risk_deps = {
         str(name).lower() for name in (data.get("high_risk_dependencies") or [])
     }
+    merge_method = str(data.get("merge_method") or "squash")
+    if merge_method not in ("squash", "rebase"):
+        raise ValueError(f"merge_method must be squash or rebase, got {merge_method!r}")
     return Policy(
         risk_labels={str(k): dict(v) for k, v in risk_labels.items()},
         codex_label={str(k): str(v) for k, v in codex.items()},
@@ -152,6 +167,13 @@ def policy_from_dict(data: dict[str, Any]) -> Policy:
             or os.getenv("AUTOMATION_WORKFLOW_NAME")
             or "PR merge automation"
         ),
+        approval={str(k): str(v) for k, v in (data.get("approval") or {}).items()},
+        approval_actors=tuple(data.get("approval_actors") or ()),
+        approval_excluded_file_patterns=tuple(
+            data.get("approval_excluded_file_patterns") or ()
+        ),
+        codex_reviewer_logins=tuple(data.get("codex_reviewer_logins") or ()),
+        merge_method=merge_method,
     )
 
 
@@ -586,6 +608,19 @@ def ensure_labels(repo: str, policy: Policy) -> None:
         policy.codex_label.get("description", "Codex review requested"),
         "--force",
     )
+    if approval_lane_enabled(policy):
+        run_gh(
+            "label",
+            "create",
+            policy.approval_label,
+            "--repo",
+            repo,
+            "--color",
+            policy.approval.get("color", "1D76DB"),
+            "--description",
+            policy.approval.get("description", "Owner approved for automation merge"),
+            "--force",
+        )
 
 
 def current_label_names(pr: dict[str, Any]) -> set[str]:
@@ -620,16 +655,21 @@ def sync_labels(repo: str, pr: dict[str, Any], decision: Decision, policy: Polic
         remove_label(repo, number, policy.codex_label_name)
 
 
+def title_has_keyword(title: str, keywords: tuple[str, ...]) -> bool:
+    """Whole-word match. Substring matching put "authoring" in the "auth" bucket."""
+    return any(re.search(rf"\b{re.escape(word)}\b", title) for word in keywords)
+
+
 def is_manual_only(pr: dict[str, Any], default_branch: str, policy: Policy) -> bool:
     title = (pr.get("title") or "").lower()
     if pr["baseRefName"] != default_branch:
         return True
-    return any(word in title for word in policy.manual_only_title_keywords)
+    return title_has_keyword(title, policy.manual_only_title_keywords)
 
 
 def is_high_risk(pr: dict[str, Any], policy: Policy) -> bool:
     title = (pr.get("title") or "").lower()
-    if any(word in title for word in policy.high_risk_title_keywords):
+    if title_has_keyword(title, policy.high_risk_title_keywords):
         return True
     return any_file_matches(files(pr), policy.high_risk_file_patterns)
 
@@ -714,12 +754,17 @@ def request_review_once(repo: str, pr: dict[str, Any], decision: Decision, polic
     marker = f"{policy.codex_review_prefix}{pr['headRefOid']}"
     if find_marker_comment_live(repo, pr["number"], marker, policy):
         return False
+    approval_note = (
+        f" unless an owner approves it with the `{policy.approval_label}` label"
+        if approval_lane_enabled(policy)
+        else ""
+    )
     comment(
         repo,
         pr["number"],
         (
             "@codex review\n\n"
-            f"{decision.risk} PR. Automation will not merge this PR. "
+            f"{decision.risk} PR. Automation will not merge this PR{approval_note}. "
             "Please review the diff and leave findings if anything needs changes.\n\n"
             f"<!-- {marker} -->"
         ),
@@ -727,9 +772,15 @@ def request_review_once(repo: str, pr: dict[str, Any], decision: Decision, polic
     return True
 
 
-def actor_allowed_to_merge(policy: Policy) -> tuple[bool, str]:
+def actor_allowed_to_merge(
+    policy: Policy, extra_actors: tuple[str, ...] = ()
+) -> tuple[bool, str]:
     actor = os.getenv("GITHUB_ACTOR") or ""
-    allowed = set(policy.allowed_merge_actors) | set(policy.trusted_comment_authors)
+    allowed = (
+        set(policy.allowed_merge_actors)
+        | set(policy.trusted_comment_authors)
+        | set(extra_actors)
+    )
     # Env-configured automation authors are always allowed merge actors.
     env_authors = os.getenv("AUTOMATION_COMMENT_AUTHORS")
     if env_authors:
@@ -744,9 +795,11 @@ def actor_allowed_to_merge(policy: Policy) -> tuple[bool, str]:
     return True, f"actor {actor} allowed"
 
 
-def merge(repo: str, pr: dict[str, Any], policy: Policy) -> None:
+def merge(
+    repo: str, pr: dict[str, Any], policy: Policy, extra_actors: tuple[str, ...] = ()
+) -> None:
     number = str(pr["number"])
-    ok, reason = actor_allowed_to_merge(policy)
+    ok, reason = actor_allowed_to_merge(policy, extra_actors)
     if not ok:
         print(f"#{number}: skip merge - {reason}")
         return
@@ -761,13 +814,15 @@ def merge(repo: str, pr: dict[str, Any], policy: Policy) -> None:
         number,
         "--repo",
         repo,
-        "--squash",
+        f"--{policy.merge_method}",
         "--match-head-commit",
         pr["headRefOid"],
     )
 
 
-def merge_if_clean(repo: str, pr: dict[str, Any], policy: Policy) -> None:
+def merge_if_clean(
+    repo: str, pr: dict[str, Any], policy: Policy, extra_actors: tuple[str, ...] = ()
+) -> None:
     number = pr["number"]
     green, check_reason = has_green_checks(pr, policy)
     if not green:
@@ -780,8 +835,82 @@ def merge_if_clean(repo: str, pr: dict[str, Any], policy: Policy) -> None:
     if threads:
         print(f"#{number}: skip - {threads} unresolved review thread(s)")
         return
-    merge(repo, pr, policy)
+    merge(repo, pr, policy, extra_actors)
     print(f"#{number}: merged")
+
+
+REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`")
+
+
+def approval_lane_enabled(policy: Policy) -> bool:
+    return bool(policy.approval_label and policy.approval_actors)
+
+
+def gh_paginated(path: str) -> list[dict[str, Any]]:
+    pages = gh_json("api", path, "--paginate", "--slurp") or []
+    return [item for page in pages for item in page]
+
+
+def approval_actor(events: list[dict[str, Any]], label: str) -> str | None:
+    """Login that most recently applied `label` (issue events are chronological)."""
+    actor = None
+    for event in events:
+        if event.get("event") == "labeled" and (event.get("label") or {}).get("name") == label:
+            actor = (event.get("actor") or {}).get("login")
+    return actor
+
+
+def codex_reviewed_head(
+    head_oid: str, items: list[dict[str, Any]], reviewer_logins: tuple[str, ...]
+) -> bool:
+    """True when a Codex comment or review names the current head as reviewed.
+
+    Findings arrive as review threads, which merge_if_clean requires resolved, so
+    "reviewed this head" plus "no unresolved threads" means the review is settled.
+    """
+    for item in items:
+        if (item.get("user") or {}).get("login") not in reviewer_logins:
+            continue
+        match = REVIEWED_COMMIT_RE.search(item.get("body") or "")
+        if match and head_oid.startswith(match.group(1)):
+            return True
+    return False
+
+
+def approval_static_blocker(
+    pr: dict[str, Any], default_branch: str, policy: Policy
+) -> str | None:
+    """Checks that need no API call. None means the PR may use the approved lane."""
+    if not approval_lane_enabled(policy):
+        return "approval lane disabled (no approval_actors)"
+    if pr["isDraft"]:
+        return "draft PR"
+    if pr["baseRefName"] != default_branch:
+        return "stacked PR"
+    if any_file_matches(files(pr), policy.approval_excluded_file_patterns):
+        return "touches files that must be merged by hand"
+    return None
+
+
+def approval_blocker(
+    repo: str, pr: dict[str, Any], default_branch: str, policy: Policy
+) -> str | None:
+    """Why the owner-approved lane cannot merge this PR yet, or None if it can."""
+    blocker = approval_static_blocker(pr, default_branch, policy)
+    if blocker:
+        return blocker
+    number = pr["number"]
+    events = gh_paginated(f"repos/{repo}/issues/{number}/events?per_page=100")
+    actor = approval_actor(events, policy.approval_label)
+    if actor not in policy.approval_actors:
+        return f"label applied by {actor!r}, who is not an approval actor"
+    items = [
+        *gh_paginated(f"repos/{repo}/issues/{number}/comments?per_page=100"),
+        *gh_paginated(f"repos/{repo}/pulls/{number}/reviews?per_page=100"),
+    ]
+    if not codex_reviewed_head(pr["headRefOid"], items, policy.codex_reviewer_logins):
+        return "no Codex review of the current head yet"
+    return None
 
 
 def handle_pr(repo: str, default_branch: str, number: int, policy: Policy) -> None:
@@ -792,8 +921,18 @@ def handle_pr(repo: str, default_branch: str, number: int, policy: Policy) -> No
 
     if decision.automerge:
         merge_if_clean(repo, pr, policy)
-    elif decision.request_codex_review and request_review_once(repo, pr, decision, policy):
+        return
+    if decision.request_codex_review and request_review_once(repo, pr, decision, policy):
         print(f"#{number}: requested Codex review")
+    if policy.approval_label not in current_label_names(pr):
+        return
+    blocker = approval_blocker(repo, pr, default_branch, policy)
+    if blocker:
+        print(f"#{number}: owner-approved, not merging yet - {blocker}")
+        return
+    print(f"#{number}: owner-approved - checking merge gates")
+    # Codex's review comment is what usually triggers this run, so its bot is the actor.
+    merge_if_clean(repo, pr, policy, policy.codex_reviewer_logins)
 
 
 def main() -> None:
