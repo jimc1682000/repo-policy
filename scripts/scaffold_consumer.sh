@@ -15,7 +15,8 @@ set -euo pipefail
 
 REPO=""
 DEFAULT_BRANCH="main"
-POLICY_REF="v1.2"
+# Default to the release the central poller runs, so new wrappers start aligned.
+POLICY_REF="$(sed -n 's/^policy_ref:[[:space:]]*//p' "$(dirname "$0")/../consumers.yml")"
 AUTHORS="github-actions[bot],jimc1682000"
 WRITE_DIR=""
 WITH_OVERRIDE=0

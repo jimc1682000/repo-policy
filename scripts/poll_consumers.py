@@ -32,6 +32,7 @@ CONSUMERS_PATH = ROOT / "consumers.yml"
 DEFAULT_OVERRIDE_PATH = ".github/policies/pr-automerge.yml"
 DEFAULT_AUTHORS = "github-actions[bot],jimc1682000"
 DEFAULT_WORKFLOW_NAME = "PR merge automation"
+DEFAULT_WRAPPER_PATH = ".github/workflows/pr-merge-automation.yml"
 GH_BIN = shutil.which("gh")
 
 
@@ -43,6 +44,10 @@ class ConsumerUnreadable(RuntimeError):
     """The consumer's open PRs could not be listed at all."""
 
 
+class WrapperDrift(RuntimeError):
+    """The consumer's wrapper is not pinned to the poller's policy_ref."""
+
+
 @dataclass(frozen=True)
 class Consumer:
     repo: str  # owner/name
@@ -50,6 +55,7 @@ class Consumer:
     override_path: str
     authors: str
     workflow_name: str
+    wrapper_path: str = DEFAULT_WRAPPER_PATH
 
 
 def load_consumers(path: Path) -> dict:
@@ -71,6 +77,7 @@ def selected_consumers(data: dict) -> list[Consumer]:
                 override_path=entry.get("policy_override_path", DEFAULT_OVERRIDE_PATH),
                 authors=entry.get("automation_comment_authors", DEFAULT_AUTHORS),
                 workflow_name=entry.get("automation_workflow_name", DEFAULT_WORKFLOW_NAME),
+                wrapper_path=entry.get("wrapper_path", DEFAULT_WRAPPER_PATH),
             )
         )
     return out
@@ -117,6 +124,47 @@ def open_pr_numbers(repo: str) -> list[int]:
             f"{result.stderr.strip() or f'gh exit {result.returncode}'}"
         )
     return [int(line) for line in result.stdout.split() if line.strip().isdigit()]
+
+
+def check_wrapper_pin(consumer: Consumer, policy_ref: str) -> None:
+    """Raise unless the consumer's wrapper pins exactly the poller's policy_ref.
+
+    The wrapper (on PR events) and this poller (on the timer) must evaluate with
+    the same policy version; otherwise one PR is classified twice under two
+    rules and its labels flap. Both the reusable-workflow ref and the
+    `policy_ref` input are checked, since the wrapper passes them separately.
+    """
+    result = run_gh(
+        "api",
+        "-H",
+        "Accept: application/vnd.github.raw",
+        f"repos/{consumer.repo}/contents/{consumer.wrapper_path}"
+        f"?ref={consumer.default_branch}",
+        check=False,
+    )
+    if result.returncode != 0:
+        raise WrapperDrift(
+            f"{consumer.repo}: cannot read {consumer.wrapper_path} — "
+            f"{result.stderr.strip() or f'gh exit {result.returncode}'}"
+        )
+    # 解析 YAML 只看生效的 job:註解掉的舊 uses 行不算;ref 取 @ 後整段(v1.5/hotfix ≠ v1.5)
+    try:
+        jobs = (yaml.safe_load(result.stdout) or {}).get("jobs") or {}
+    except (yaml.YAMLError, AttributeError) as exc:
+        raise WrapperDrift(f"{consumer.repo}: cannot parse {consumer.wrapper_path} — {exc}")
+    uses: set[str] = set()
+    inputs: set[str] = set()
+    for job in jobs.values() if isinstance(jobs, dict) else []:
+        target = str((job or {}).get("uses") or "")
+        if "/pr-automerge.yml@" not in target:
+            continue
+        uses.add(target.split("@", 1)[1])
+        inputs.add(str(((job or {}).get("with") or {}).get("policy_ref")))
+    if uses != {policy_ref} or inputs != {policy_ref}:
+        raise WrapperDrift(
+            f"{consumer.repo}: wrapper pins uses={sorted(uses) or 'none'} "
+            f"policy_ref={sorted(inputs) or 'none'}, poller expects {policy_ref}"
+        )
 
 
 def fetch_override(consumer: Consumer, dest_dir: Path) -> Path | None:
@@ -203,7 +251,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    consumers = selected_consumers(load_consumers(args.consumers))
+    inventory = load_consumers(args.consumers)
+    policy_ref = inventory.get("policy_ref")
+    consumers = selected_consumers(inventory)
     if args.repo:
         wanted = args.repo if "/" in args.repo else None
         consumers = [
@@ -217,6 +267,16 @@ def main(argv: list[str] | None = None) -> int:
     evaluated: list[str] = []
     failed: list[str] = []
     for consumer in consumers:
+        # Drift is checked even when the repo has no open PRs: the mismatch is
+        # already wrong, and it should surface before a PR arrives to flap.
+        # A drifted repo is skipped rather than evaluated under the wrong rules.
+        if policy_ref:
+            try:
+                check_wrapper_pin(consumer, policy_ref)
+            except WrapperDrift as exc:
+                print(f"WARNING wrapper drift: {exc}", file=sys.stderr)
+                failed.append(f"{consumer.repo} (wrapper drift)")
+                continue
         try:
             numbers = open_pr_numbers(consumer.repo)
         except ConsumerUnreadable as exc:

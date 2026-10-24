@@ -59,5 +59,7 @@ def test_scaffold_does_not_overwrite_existing_adr_override(tmp_path: Path) -> No
 
     assert "wrote wrapper" in result.stdout
     workflow = (tmp_path / ".github/workflows/adr-gate.yml").read_text()
-    assert "adr-gate.yml@v1.2" in workflow
+    # 預設版本跟 central poller 同一個 pin(consumers.yml)
+    pinned = yaml.safe_load((ROOT / "consumers.yml").read_text())["policy_ref"]
+    assert f"adr-gate.yml@{pinned}" in workflow
     assert override.read_text() == "architecture_sensitive_paths:\n  - custom/**\n"
