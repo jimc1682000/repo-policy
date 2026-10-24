@@ -88,9 +88,12 @@ risk 不是 low 的 PR,owner 看過後可以貼 `automerge:approved` 授權自�
 - 一般 merge gate:checks 全綠、mergeable、unresolved review threads = 0。Codex 的
   findings 是 review thread,沒 resolve 就不會合併
 
-這條路由事件觸發(label、Codex 的 comment、CI 完成),不靠排程;見下方 wrapper 範例。
-只在 thread 上回覆理由並 resolve、沒有 push 時,不會有事件觸發重評:在 PR 留一則
-comment,或手動 `gh workflow run`。
+這條路由事件觸發(label、PR 上的 comment、CI 完成),不靠排程;見下方 wrapper 範例。
+Codex 有 findings 時是以 PR review 送出,但那時 thread 尚未 resolve,本來就不會合併;
+**刻意不訂閱 `pull_request_review`**:它執行 PR head 的 workflow 檔並帶 secret,違反上面的
+安全原則。resolve thread 不會產生任何事件,所以 findings 只回覆理由、沒有 push 時,
+resolve 完留一則 `@codex review`:它本身是 issue comment 會觸發重評,Codex 對同一個
+head 的新 receipt 也會再觸發一次。
 
 ### `risk:low` 條件（摘要）
 
