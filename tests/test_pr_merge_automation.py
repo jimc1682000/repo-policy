@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -646,6 +647,14 @@ def _codex_receipt(sha: str = HEAD[:10], author: str = CODEX) -> dict:
     return {"user": {"login": author}, "body": body}
 
 
+def _codex_state(sha: str = HEAD, author: str = CODEX, **overrides) -> dict:
+    code_review = {"commit_sha": sha, "has_any_findings": False,
+                   "has_unresolved_findings": False, "status": "completed", **overrides}
+    state = json.dumps({"code_review": code_review, "security_review": {"commit_sha": None}})
+    body = f"<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 {state} -->\nsummary"
+    return {"user": {"login": author}, "body": body}
+
+
 def _labeled(actor: str, label: str = "automerge:approved") -> dict:
     return {"event": "labeled", "label": {"name": label}, "actor": {"login": actor}}
 
@@ -676,6 +685,23 @@ class TestApprovalPieces:
         assert reviewed(HEAD, [_codex_receipt()], (CODEX,))
         assert not reviewed(HEAD, [_codex_receipt("aaaaaaaaaa")], (CODEX,))
         assert not reviewed(HEAD, [_codex_receipt(author="mallory")], (CODEX,))
+
+    def test_codex_summary_state_counts_only_when_settled_on_head(self):
+        reviewed = pr_merge_automation.codex_reviewed_head
+        assert reviewed(HEAD, [_codex_state()], (CODEX,))
+        assert not reviewed(HEAD, [_codex_state(sha=HEAD[:10])], (CODEX,))
+        assert not reviewed(HEAD, [_codex_state(sha="a" * 40)], (CODEX,))
+        assert not reviewed(HEAD, [_codex_state(has_unresolved_findings=True)], (CODEX,))
+        assert not reviewed(HEAD, [_codex_state(status="running")], (CODEX,))
+        assert not reviewed(HEAD, [_codex_state(author="mallory")], (CODEX,))
+
+    def test_codex_summary_state_fails_closed_on_bad_shape(self):
+        reviewed = pr_merge_automation.codex_reviewed_head
+        broken = {"user": {"login": CODEX}, "body": "<!-- codex-review-state:v1 {not json} -->"}
+        missing = {"user": {"login": CODEX},
+                   "body": '<!-- codex-review-state:v1 {"code_review": {"status": "completed"}} -->'}
+        assert not reviewed(HEAD, [broken], (CODEX,))
+        assert not reviewed(HEAD, [missing], (CODEX,))
 
     def test_invalid_merge_method_rejected(self):
         data = deep_merge_policy(load_yaml_file(DEFAULT_POLICY_PATH), {"merge_method": "merge"})
