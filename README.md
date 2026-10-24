@@ -185,10 +185,10 @@ jobs:
   evaluate:
     # issue_comment 也會因一般 issue 觸發,只處理 PR 上的 comment
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request
-    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.4
+    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.5
     with:
       default_branch: master
-      policy_ref: v1.4
+      policy_ref: v1.5
       pr_number: ${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || '' }}
       policy_override_path: .github/policies/pr-automerge.yml
       automation_comment_authors: github-actions[bot],YOUR_GITHUB_LOGIN
@@ -314,10 +314,17 @@ unset AUTOMERGE_TOKEN
 生產環境建議 pin：
 
 ```yaml
-uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.2
+uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.5
 # 並傳
 with:
-  policy_ref: v1.2
+  policy_ref: v1.5
 ```
 
 `main` 適合個人 repo 快速迭代；對外或高敏感 repo 請 pin tag / commit SHA。
+
+所有 consumer wrapper 與 central poller 一起升版：poller 用 `consumers.yml` 的
+`policy_ref`，wrapper 釘的版本必須與它相同，否則同一個 PR 會被兩版 policy 分類、
+label 來回翻。poller 每次輪詢都讀各 consumer 的 wrapper(預設
+`.github/workflows/pr-merge-automation.yml`，可用 `wrapper_path` 覆寫)，`uses: …@<ref>`
+或 `policy_ref:` 不符就印 `WARNING wrapper drift`、跳過該 repo，整個 run 以非 0 結束。
+`scaffold_consumer.sh` 的預設版本也讀 `consumers.yml`。

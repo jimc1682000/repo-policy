@@ -13,6 +13,8 @@ from scripts.poll_consumers import (
     Consumer,
     ConsumerUnreadable,
     OverrideFetchError,
+    WrapperDrift,
+    check_wrapper_pin,
     fetch_override,
     open_pr_numbers,
     selected_consumers,
@@ -95,3 +97,103 @@ def test_consumer_is_hashable_and_frozen():
     consumer = Consumer("o/r", "main", "p.yml", "a", "w")
     with pytest.raises(Exception):
         consumer.repo = "other"  # type: ignore[misc]
+
+
+WRAPPER = """jobs:
+  evaluate:
+    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@{uses}
+    with:
+      default_branch: main
+      policy_ref: {ref}
+"""
+
+
+def _wrapper_gh(monkeypatch, body, returncode=0, stderr=""):
+    calls = []
+
+    def fake_run_gh(*args, check=True):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, returncode, body, stderr)
+
+    monkeypatch.setattr(poll_consumers, "run_gh", fake_run_gh)
+    return calls
+
+
+def test_wrapper_pinned_to_poller_ref_passes(monkeypatch):
+    consumer = Consumer("o/r", "master", "p.yml", "a", "w")
+    calls = _wrapper_gh(monkeypatch, WRAPPER.format(uses="v1.5", ref="v1.5"))
+    check_wrapper_pin(consumer, "v1.5")
+    assert calls[0][-1] == (
+        "repos/o/r/contents/.github/workflows/pr-merge-automation.yml?ref=master"
+    )
+
+
+@pytest.mark.parametrize(
+    ("uses", "ref"),
+    [("v1.4", "v1.4"), ("v1.5", "v1.4"), ("v1.4", "v1.5"), ("v1.5/hotfix", "v1.5/hotfix")],
+)
+def test_wrapper_drift_raises(monkeypatch, uses, ref):
+    # uses 與 policy_ref 是分開傳的,任一個沒跟上都會讓兩版 policy 同時分類同一個 PR
+    _wrapper_gh(monkeypatch, WRAPPER.format(uses=uses, ref=ref))
+    with pytest.raises(WrapperDrift, match="poller expects v1.5"):
+        check_wrapper_pin(Consumer("o/r", "main", "p.yml", "a", "w"), "v1.5")
+
+
+@pytest.mark.parametrize("quote", ["", '"', "'"])
+def test_slash_ref_compared_whole(monkeypatch, quote):
+    _wrapper_gh(
+        monkeypatch,
+        WRAPPER.format(uses="v1.5/hotfix", ref=f"{quote}v1.5/hotfix{quote}  # pinned"),
+    )
+    check_wrapper_pin(Consumer("o/r", "main", "p.yml", "a", "w"), "v1.5/hotfix")
+
+
+def test_commented_out_old_pin_is_ignored(monkeypatch):
+    body = WRAPPER.format(uses="v1.5", ref="v1.5").replace(
+        "    uses:", "    # uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.4\n    uses:"
+    ) + "      # policy_ref: v1.4\n"
+    _wrapper_gh(monkeypatch, body)
+    check_wrapper_pin(Consumer("o/r", "main", "p.yml", "a", "w"), "v1.5")
+
+
+def test_unparseable_wrapper_counts_as_drift(monkeypatch):
+    _wrapper_gh(monkeypatch, "jobs: [unclosed")
+    with pytest.raises(WrapperDrift, match="cannot parse"):
+        check_wrapper_pin(Consumer("o/r", "main", "p.yml", "a", "w"), "v1.5")
+
+
+def test_missing_wrapper_counts_as_drift(monkeypatch):
+    _wrapper_gh(monkeypatch, "", returncode=1, stderr="gh: Not Found (HTTP 404)")
+    with pytest.raises(WrapperDrift, match="cannot read"):
+        check_wrapper_pin(Consumer("o/r", "main", "p.yml", "a", "w"), "v1.5")
+
+
+def test_wrapper_path_override_is_read(monkeypatch):
+    data = {
+        "owner": "o",
+        "consumers": [{"repo": "r", "adopt": True, "wrapper_path": "x/w.yml"}],
+    }
+    assert selected_consumers(data)[0].wrapper_path == "x/w.yml"
+
+
+def test_main_skips_drifted_repo_and_fails_run(monkeypatch, tmp_path):
+    inventory = tmp_path / "consumers.yml"
+    inventory.write_text(
+        "owner: o\npolicy_ref: v1.5\nconsumers:\n"
+        "  - {repo: old, adopt: true}\n  - {repo: new, adopt: true}\n"
+    )
+
+    def fake_check(consumer, ref):
+        if consumer.repo == "o/old":
+            raise WrapperDrift("o/old: wrapper pins v1.4")
+
+    listed = []
+    monkeypatch.setattr(poll_consumers, "check_wrapper_pin", fake_check)
+    monkeypatch.setattr(
+        poll_consumers, "open_pr_numbers", lambda repo: listed.append(repo) or []
+    )
+    code = poll_consumers.main(
+        ["--consumers", str(inventory), "--work-dir", str(tmp_path / "w")]
+    )
+    assert code == 1
+    assert listed == ["o/new"]  # 漂移的 repo 不拿錯的 policy 評估
