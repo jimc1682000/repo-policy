@@ -102,5 +102,27 @@ thresholds:
   small_pr_max_files: 3
   small_pr_max_lines: 150
 
+# Owner-approved lane: when an approval actor applies this label, the PR merges
+# whatever its risk label, once every gate holds:
+#   - not a draft, based on the default branch, no file in
+#     approval_excluded_file_patterns (changes to the gates themselves stay manual)
+#   - a Codex comment or review names the current head as reviewed
+#   - the usual merge gates: checks green, mergeable, zero unresolved review
+#     threads (Codex findings are threads, so open findings block the merge)
+# Disabled while approval_actors is empty; consumers opt in from their override.
+approval:
+  label: "automerge:approved"
+  color: "1D76DB"
+  description: "Owner approved; automation merges once review and checks pass"
+approval_actors: []
+approval_excluded_file_patterns:
+  - ".github/workflows/*"
+  - ".github/policies/*"
+codex_reviewer_logins:
+  - "chatgpt-codex-connector[bot]"
+
+# gh pr merge method for every lane: squash | rebase (repo settings must allow it).
+merge_method: squash
+
 # Workflow name to exclude from check rollup self-reference.
 automation_workflow_name: "PR merge automation"

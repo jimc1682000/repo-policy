@@ -612,3 +612,131 @@ class TestCheckRollupToken:
         monkeypatch.setattr(pr_merge_automation, "gh_json", fake_gh_json)
         with pytest.raises(SystemExit):
             pr_merge_automation.load_pr("owner/repo", 1)
+
+
+class TestTitleKeywords:
+    def test_keyword_inside_a_word_does_not_match(self, policy):
+        pr = _pr(
+            title="docs(skills): follow skill authoring best practices",
+            author="jimc1682000",
+            files=["skills/a/SKILL.md"],
+        )
+        assert classify(pr, "master", policy).risk != "risk:manual-only"
+
+    def test_whole_word_keyword_still_matches(self, policy):
+        pr = _pr(title="fix(auth): rotate session keys", author="jimc1682000")
+        assert classify(pr, "master", policy).risk == "risk:manual-only"
+
+
+HEAD = "e540571fae0123456789abcdef0123456789abcd"
+CODEX = "chatgpt-codex-connector[bot]"
+
+
+@pytest.fixture
+def approval_policy(policy):
+    data = deep_merge_policy(
+        load_yaml_file(DEFAULT_POLICY_PATH),
+        {"approval_actors": ["jimc1682000"], "merge_method": "rebase"},
+    )
+    return policy_from_dict(data)
+
+
+def _codex_receipt(sha: str = HEAD[:10], author: str = CODEX) -> dict:
+    body = f"Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `{sha}`"
+    return {"user": {"login": author}, "body": body}
+
+
+def _labeled(actor: str, label: str = "automerge:approved") -> dict:
+    return {"event": "labeled", "label": {"name": label}, "actor": {"login": actor}}
+
+
+class TestApprovalPieces:
+    def test_lane_disabled_without_actors(self, policy):
+        pr = _pr(title="feat: x", author="jimc1682000", labels=["automerge:approved"])
+        assert pr_merge_automation.approval_static_blocker(pr, "master", policy)
+
+    def test_gate_files_stay_manual(self, approval_policy):
+        pr = _pr(title="ci: x", author="jimc1682000", files=[".github/workflows/ci.yml"])
+        blocker = pr_merge_automation.approval_static_blocker(pr, "master", approval_policy)
+        assert blocker and "by hand" in blocker
+
+    def test_draft_and_stacked_are_blocked(self, approval_policy):
+        draft = _pr(title="feat: x", author="jimc1682000", is_draft=True)
+        stacked = _pr(title="feat: x", author="jimc1682000", base="feature")
+        static = pr_merge_automation.approval_static_blocker
+        assert static(draft, "master", approval_policy) == "draft PR"
+        assert static(stacked, "master", approval_policy) == "stacked PR"
+
+    def test_latest_labeled_event_wins(self):
+        events = [_labeled("jimc1682000"), _labeled("someone"), _labeled("x", "other")]
+        assert pr_merge_automation.approval_actor(events, "automerge:approved") == "someone"
+
+    def test_codex_receipt_must_name_current_head(self):
+        reviewed = pr_merge_automation.codex_reviewed_head
+        assert reviewed(HEAD, [_codex_receipt()], (CODEX,))
+        assert not reviewed(HEAD, [_codex_receipt("aaaaaaaaaa")], (CODEX,))
+        assert not reviewed(HEAD, [_codex_receipt(author="mallory")], (CODEX,))
+
+    def test_invalid_merge_method_rejected(self):
+        data = deep_merge_policy(load_yaml_file(DEFAULT_POLICY_PATH), {"merge_method": "merge"})
+        with pytest.raises(ValueError):
+            policy_from_dict(data)
+
+
+class TestApprovedLane:
+    """handle_pr end to end with GitHub calls stubbed."""
+
+    def _run(self, monkeypatch, policy, *, labeler="jimc1682000", receipts=None,
+             threads=0, files=None):
+        pr = _pr(
+            title="docs(skills): follow skill authoring best practices",
+            author="jimc1682000",
+            files=files or [f"dir/f{i}.py" for i in range(10)],
+            additions=400,
+            head_oid=HEAD,
+            labels=["risk:high", "automerge:approved"],
+        )
+        receipts = [_codex_receipt()] if receipts is None else receipts
+        pages = {
+            "events": [_labeled(labeler)],
+            "comments": receipts,
+            "reviews": [],
+        }
+        merged: list[tuple[str, ...]] = []
+        mod = pr_merge_automation
+        monkeypatch.setenv("GITHUB_ACTOR", CODEX)
+        monkeypatch.setattr(mod, "load_pr", lambda repo, number: pr)
+        monkeypatch.setattr(mod, "sync_labels", lambda *a: None)
+        monkeypatch.setattr(mod, "request_review_once", lambda *a: False)
+        monkeypatch.setattr(mod, "find_marker_comment_live", lambda *a: None)
+        monkeypatch.setattr(mod, "comment", lambda *a: None)
+        monkeypatch.setattr(mod, "unresolved_threads", lambda repo, number: threads)
+        monkeypatch.setattr(
+            mod,
+            "gh_paginated",
+            lambda path: next(v for k, v in pages.items() if f"/{k}?" in path),
+        )
+        monkeypatch.setattr(mod, "run_gh", lambda *args, **kw: merged.append(args) or "")
+        mod.handle_pr("o/r", "master", 1, policy)
+        return [args for args in merged if args[:2] == ("pr", "merge")]
+
+    def test_approved_reviewed_clean_pr_merges_with_policy_method(
+        self, monkeypatch, approval_policy
+    ):
+        merges = self._run(monkeypatch, approval_policy)
+        assert len(merges) == 1
+        assert "--rebase" in merges[0] and HEAD in merges[0]
+
+    def test_open_codex_finding_blocks_merge(self, monkeypatch, approval_policy):
+        assert self._run(monkeypatch, approval_policy, threads=1) == []
+
+    def test_no_review_of_current_head_blocks_merge(self, monkeypatch, approval_policy):
+        stale = [_codex_receipt("0123456789")]
+        assert self._run(monkeypatch, approval_policy, receipts=stale) == []
+
+    def test_label_from_non_actor_blocks_merge(self, monkeypatch, approval_policy):
+        assert self._run(monkeypatch, approval_policy, labeler="mallory") == []
+
+    def test_gate_files_block_merge(self, monkeypatch, approval_policy):
+        files = [".github/policies/pr-automerge.yml"]
+        assert self._run(monkeypatch, approval_policy, files=files) == []

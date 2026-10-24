@@ -70,6 +70,28 @@ branch 出現。每週 audit 需 secret `REPO_POLICY_AUDIT_TOKEN`；完整流程
 | `risk:high` | 同上 |
 | `risk:manual-only` | 同上（draft / stacked / 無法自信分類等） |
 
+標題關鍵字（`manual_only_title_keywords` / `high_risk_title_keywords`）以**整字**比對：
+`auth` 擋得到 `fix(auth): ...`,不會再把 `authoring` 判成 manual-only。
+
+### Owner-approved lane（`automerge:approved`）
+
+risk 不是 low 的 PR,owner 看過後可以貼 `automerge:approved` 授權自動合併。owner 也可以
+授權 agent 用 owner 自己的 `gh` 身分代貼(GitHub 上記錄的 actor 仍是 owner)。
+預設關閉,consumer 在 override 設 `approval_actors` 才開啟。合併前全部成立:
+
+- 最近一次貼這個 label 的人 ∈ `approval_actors`(看 issue events,不看 label 現況)
+- 不是 draft、base 是 default branch
+- 沒有檔案落在 `approval_excluded_file_patterns`(預設 `.github/workflows/*`、
+  `.github/policies/*`):改到把關機制本身的 PR 一律手動合併
+- `codex_reviewer_logins` 的 comment 或 review 寫著 `Reviewed commit:` 為**目前 head**
+  ——這取代「push 後等 N 分鐘」:等的本來就是 review,直接確認 review 完成
+- 一般 merge gate:checks 全綠、mergeable、unresolved review threads = 0。Codex 的
+  findings 是 review thread,沒 resolve 就不會合併
+
+這條路由事件觸發(label、Codex 的 comment、CI 完成),不靠排程;見下方 wrapper 範例。
+只在 thread 上回覆理由並 resolve、沒有 push 時,不會有事件觸發重評:在 PR 留一則
+comment,或手動 `gh workflow run`。
+
 ### `risk:low` 條件（摘要）
 
 - dependency patch/minor、lockfile-only、workflow patch/minor、小幅 docs-only
@@ -89,7 +111,8 @@ branch 出現。每週 audit 需 secret `REPO_POLICY_AUDIT_TOKEN`；完整流程
 
 - actor ∈ allowed automation identities
 - checks green、threads resolved、mergeable、head SHA guard
-- **只** merge `risk:low`
+- **只** merge `risk:low`,或通過 owner-approved lane 的 PR
+- 合併方式由 `merge_method`(`squash` 預設 / `rebase`)決定,repo 設定要允許該方式
 
 ### 安全
 
@@ -126,8 +149,12 @@ name: PR merge automation
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
     branches: [master]   # or main
+  # owner-approved lane:Codex 的 review 結果以 PR comment 送達,要靠它觸發重評。
+  # issue_comment 跑在 default branch,不會執行 PR head。
+  issue_comment:
+    types: [created]
   workflow_run:
     workflows: ["CI"]    # 依 repo 實際 CI workflow 名稱
     types: [completed]
@@ -144,13 +171,18 @@ permissions:
   actions: read
   statuses: read
 
+concurrency:
+  group: pr-merge-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+
 jobs:
   evaluate:
-    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.2
+    # issue_comment 也會因一般 issue 觸發,只處理 PR 上的 comment
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.4
     with:
       default_branch: master
-      policy_ref: v1.2
-      pr_number: ${{ github.event.pull_request.number || '' }}
+      policy_ref: v1.4
+      pr_number: ${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || '' }}
       policy_override_path: .github/policies/pr-automerge.yml
       automation_comment_authors: github-actions[bot],YOUR_GITHUB_LOGIN
       automation_workflow_name: PR merge automation
@@ -193,6 +225,13 @@ trusted_comment_authors:
 
 allowed_merge_actors:
   - jimc1682000
+
+# 開啟 owner-approved lane(預設關閉)
+approval_actors:
+  - jimc1682000
+
+# 合併方式(預設 squash;改 rebase 要先讓 repo 設定允許 rebase merge)
+merge_method: rebase
 ```
 
 ### 3. Renovate
