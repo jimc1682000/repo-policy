@@ -44,6 +44,10 @@ repositories:
     profile: baseline
     default_branch: main
     classification: active
+    overrides:
+      repository_settings:
+        allow_rebase_merge: true
+    notes: "merge_method: rebase(多 commit PR 保留各 commit,對齊 CONTRIBUTING 的 rebase 後 ff)"
 
   - repo: my-kb
     manage: true
