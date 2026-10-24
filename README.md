@@ -84,7 +84,11 @@ risk 不是 low 的 PR,owner 看過後可以貼 `automerge:approved` 授權自�
 - 沒有檔案落在 `approval_excluded_file_patterns`(預設 `.github/workflows/*`、
   `.github/policies/*`):改到把關機制本身的 PR 一律手動合併
 - `codex_reviewer_logins` 的 comment 或 review 寫著 `Reviewed commit:` 為**目前 head**
-  ——這取代「push 後等 N 分鐘」:等的本來就是 review,直接確認 review 完成
+  ——這取代「push 後等 N 分鐘」:等的本來就是 review,直接確認 review 完成。
+  Codex 有時只更新 summary comment、不留 receipt:summary 裡的
+  `<!-- codex-review-state:v1 {...} -->` 也算,條件是 `code_review.commit_sha` 等於
+  目前 head 的完整 sha、`status` 為 `completed`、`has_unresolved_findings` 為 `false`;
+  解析不了或欄位不齊就不算。👍 reaction 不算:它沒有綁定是哪個 commit
 - 一般 merge gate:checks 全綠、mergeable、unresolved review threads = 0。Codex 的
   findings 是 review thread,沒 resolve 就不會合併
 

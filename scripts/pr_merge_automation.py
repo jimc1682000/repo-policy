@@ -840,6 +840,7 @@ def merge_if_clean(
 
 
 REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`")
+REVIEW_STATE_RE = re.compile(r"<!--\s*codex-review-state:v1\s+(\{.*?\})\s*-->", re.S)
 
 
 def approval_lane_enabled(policy: Policy) -> bool:
@@ -871,10 +872,33 @@ def codex_reviewed_head(
     for item in items:
         if (item.get("user") or {}).get("login") not in reviewer_logins:
             continue
-        match = REVIEWED_COMMIT_RE.search(item.get("body") or "")
+        body = item.get("body") or ""
+        match = REVIEWED_COMMIT_RE.search(body)
         if match and head_oid.startswith(match.group(1)):
             return True
+        if review_state_settles_head(head_oid, body):
+            return True
     return False
+
+
+def review_state_settles_head(head_oid: str, body: str) -> bool:
+    """True when a Codex summary comment's machine state says this head is done and clean.
+
+    Codex sometimes posts only this summary instead of a receipt. Anything that does not
+    parse into exactly the expected shape counts as not reviewed.
+    """
+    match = REVIEW_STATE_RE.search(body)
+    if not match:
+        return False
+    try:
+        state = json.loads(match.group(1))["code_review"]
+        return (
+            state["commit_sha"] == head_oid
+            and state["status"] == "completed"
+            and state["has_unresolved_findings"] is False
+        )
+    except (ValueError, KeyError, TypeError):
+        return False
 
 
 def approval_static_blocker(
