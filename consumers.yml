@@ -22,7 +22,7 @@
 owner: jimc1682000
 # This is the automerge poller's pin. Every consumer wrapper must pin the same
 # release; poll_consumers.py checks each wrapper and fails the run on drift.
-policy_ref: v1.5
+policy_ref: v1.6
 secret_name: AUTOMERGE_TOKEN
 
 consumers:

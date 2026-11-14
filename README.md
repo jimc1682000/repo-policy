@@ -185,10 +185,10 @@ jobs:
   evaluate:
     # issue_comment 也會因一般 issue 觸發,只處理 PR 上的 comment
     if: github.event_name != 'issue_comment' || github.event.issue.pull_request
-    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.5
+    uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.6
     with:
       default_branch: master
-      policy_ref: v1.5
+      policy_ref: v1.6
       pr_number: ${{ github.event.pull_request.number || github.event.issue.number || github.event.workflow_run.pull_requests[0].number || '' }}
       policy_override_path: .github/policies/pr-automerge.yml
       automation_comment_authors: github-actions[bot],YOUR_GITHUB_LOGIN
@@ -316,10 +316,10 @@ unset AUTOMERGE_TOKEN
 生產環境建議 pin：
 
 ```yaml
-uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.5
+uses: jimc1682000/repo-policy/.github/workflows/pr-automerge.yml@v1.6
 # 並傳
 with:
-  policy_ref: v1.5
+  policy_ref: v1.6
 ```
 
 `main` 適合個人 repo 快速迭代；對外或高敏感 repo 請 pin tag / commit SHA。
