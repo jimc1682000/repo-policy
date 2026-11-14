@@ -198,6 +198,8 @@ jobs:
 ```
 
 > `AUTOMERGE_TOKEN` 可選（fine-grained PAT，建議 1 年到期、Only select repos）。未設定時 fallback `github.token`。
+
+> `runner` 可選：`runs-on` 的 JSON 值，預設 `'"ubuntu-latest"'`。private consumer 有自己的 runner 時傳 `'["self-hosted","linux","x64"]'`，這個 job 就不扣 Actions 分鐘；runner 上要有 `python` 及可安裝 pyyaml 的 pip。
 >
 > 建立 / 一年輪替：見 [docs/pat-automerge-token.md](docs/pat-automerge-token.md) 與 `scripts/set_automerge_token.sh`。
 
