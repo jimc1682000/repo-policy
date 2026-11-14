@@ -21,5 +21,9 @@ def test_runner_defaults_to_github_hosted_ubuntu() -> None:
     assert runner["type"] == "string"
     # Existing wrappers pass no runner and must keep running where they did.
     assert json.loads(runner["default"]) == "ubuntu-latest"
-    assert workflow["jobs"]["evaluate"]["runs-on"] == "${{ fromJSON(inputs.runner) }}"
+    # An empty string (an unset caller variable) also falls back to hosted Ubuntu.
+    assert (
+        workflow["jobs"]["evaluate"]["runs-on"]
+        == "${{ fromJSON(inputs.runner || '\"ubuntu-latest\"') }}"
+    )
 

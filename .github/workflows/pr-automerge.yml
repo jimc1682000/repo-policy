@@ -66,7 +66,8 @@ permissions:
 
 jobs:
   evaluate:
-    runs-on: ${{ fromJSON(inputs.runner) }}
+    # 空字串(caller 傳了未設定的 variable)也退回 GitHub 主機。
+    runs-on: ${{ fromJSON(inputs.runner || '"ubuntu-latest"') }}
     env:
       GH_TOKEN: ${{ secrets.token || github.token }}
       GITHUB_TOKEN: ${{ secrets.token || github.token }}
