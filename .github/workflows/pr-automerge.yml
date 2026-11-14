@@ -44,6 +44,13 @@ on:
         description: Classify and print actions without mutating the PR
         type: boolean
         default: false
+      runner:
+        description: >-
+          JSON value for runs-on, e.g. '"ubuntu-latest"' or
+          '["self-hosted","linux","x64"]'. A private consumer with its own
+          runner pays no Actions minutes for this job.
+        type: string
+        default: '"ubuntu-latest"'
     secrets:
       token:
         description: Token with contents:write + pull-requests:write (falls back to github.token)
@@ -59,7 +66,7 @@ permissions:
 
 jobs:
   evaluate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runner) }}
     env:
       GH_TOKEN: ${{ secrets.token || github.token }}
       GITHUB_TOKEN: ${{ secrets.token || github.token }}
